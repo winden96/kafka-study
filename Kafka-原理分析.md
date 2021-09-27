@@ -41,8 +41,6 @@ index文件里每条记录的大小是固定的，便于查询，只需把大小
 
 “.index”文件存储大量的索引信息，“.log”文件存储大量的数据，索引文件中的元 数据指向对应数据文件中 message 的物理偏移地址。
 
-
-
 # Controller 
 
 ## 选举机制
@@ -68,6 +66,62 @@ index文件里每条记录的大小是固定的，便于查询，只需把大小
 
 
 
+# 消费者自动分区公式
+
+hash(key)%partitionNum
+
+key是consumer发送消息时的key
+
+# 消费者的offset
+
+## 介绍
+
+consumerGroupId+topic+分区号确定了唯一的offset，它表示当前消费者消费到了某个主题分区的某条消息。每个consumer是基于自己在commit log中的消费进度(offset)来进行工作的。在kafka中，offset 由 consumer 自己来维护。而这意味kafka中的consumer对集群的影响是非常小的，添加一个或者减少一个consumer，对于集群或者其他consumer 来说，都是没有影响的，因为每个consumer维护各自的offset且一个消费者组中只能有一个消费者消费同一个分区。**所以说kafka集群是无状态的，性能不会因为 consumer数量受太多影响。kafka还将很多关键信息记录在zookeeper里，保证自己的无状态，从而在水平扩容时非常方便。**
+
+一般情况下按照顺序逐条消费commit log中的消息，当然可以通过指定offset来重复消费某些消息， 或者跳过某些消息。
+
+consumer启动时会获取一次offset，而后在自己的内存中进行维护。
+
+
+
+## 获取 __consumer_offsets 队列
+
+Kafka 0.9 版本之前，consumer 默认将 offset 保存在 Zookeeper 中，从 0.9 版本开始， consumer 默认将 offset 保存在 Kafka 一个内置的 topic 中，该 topic 为__consumer_offsets。
+
+1）修改配置文件
+
+consumer.properties exclude.internal.topics=false
+
+2）读取 offset
+
+0.11.0.0 之前版本:
+
+```sh
+bin/kafka-console-consumer.sh --topic __consumer_offsets --zookeeper hadoop102:2181 --formatter "kafka.coordinator.GroupMetadataManager\$OffsetsMessageFormatter" --consumer.config config/consumer.properties --from-beginning
+```
+
+0.11.0.0 之后版本(含):
+
+```sh
+bin/kafka-console-consumer.sh --topic __consumer_offsets --zookeeper hadoop102:2181 --formatter "kafka.coordinator.group.GroupMetadataManager\$OffsetsMessageFormatter" --consumer.config config/consumer.properties --frombeginning
+```
+
+
+
+## offset记录机制
+
+由于 consumer 在消费过程中可能会出现断电宕机等故障，consumer 恢复后，需要从故障前的位置的继续消费，所以 consumer 需要记录自己消费到了哪个 offset，以便故障恢复后继续消费。
+
+每个consumer会定期将自己消费分区的offset提交给kafka内部topic（__consumer_offsets），提交过去的时候，key是 consumerGroupId+topic+分区号，value就是当前offset的值，kafka会定期清理topic里的消息，最后就保留最新的那条数据。
+
+因为__consumer_offsets可能会接收到高并发的请求，kafka默认给其分配50个分区(可以通过 offsets.topic.num.partitions设置)，这样可以通过加机器的方式提高并发性能。
+
+
+
+## offset分区选择公式
+
+hash(consumer group id) % __consumer_offsets主题的分区数
+
 # 消费者Rebalance机制
 
 ## 介绍
@@ -84,15 +138,23 @@ index文件里每条记录的大小是固定的，便于查询，只需把大小
 
 当有消费者加入消费组时，消费者、消费组及组协调器之间会经历以下几个阶段。
 
-> 组协调器GroupCoordinator：每个consumer group都会选择一个broker作为自己的组协调器coordinator，负责监控这个消费组里的所有消费者的心跳，以及判断是否宕机，然后开启消费者rebalance。
+> 组协调器GroupCoordinator：每个consumer group都会选择一个**broker**作为自己的组协调器coordinator，负责监控这个消费组里的所有消费者的心跳，以及判断是否宕机，然后开启消费者rebalance。
 >
-> 组协调器选择方式：
->
-> 通过如下公式可以选出consumer消费的offset要提交到__consumer_offsets的哪个分区，这个分区leader对应的broker 就是这个consumer group的coordinator。
->
-> 公式：hash(consumer group id) % __consumer_offsets主题的分区数
+> 
 
 **第一阶段：选择组协调器**
 
 consumer group 中的每个consumer启动时会向kafka集群中的某个节点发送 FindCoordinatorRequest 请求来查找对应的组协调器GroupCoordinator，并跟其建立网络连接。
+
+**组协调器选举方式**：
+
+通过如下公式可以选出consumer消费的offset要提交到__consumer_offsets的哪个分区，这个分区leader对应的broker 就是这个consumer group的coordinator。
+
+公式：hash(consumer group id) % __consumer_offsets主题的分区数
+
+
+
+**第二阶段：加入消费者组（JOIN GROUP）**
+
+在成功找到消费组所对应的 GroupCoordinator 之后就进入加入消费组的阶段，在此阶段的消费者会向 GroupCoordinator 发送 JoinGroupRequest 请求，并处理响应。然后GroupCoordinator 从一个 consumer group 中选择第一个加入group的consumer作为leader(消费组协调器)，把consumer group情况发送给这个leader，接着这个 leader会负责制定分区方案。
 

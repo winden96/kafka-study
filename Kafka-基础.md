@@ -474,42 +474,6 @@ Sticky是“粘性的”，可以理解为分配结果是带“粘性的”—�
 
 
 
-## offset维护
-
-由于 consumer 在消费过程中可能会出现断电宕机等故障，consumer 恢复后，需要从故障前的位置的继续消费，所以 consumer 需要实时记录自己消费到了哪个 offset，以便故障恢 复后继续消费。
-
-根据 group_topic_Partition （查看zk路径可以直观的看出这点，offset在zk中的存储路径：/consumers/group/offsets/topic/partition）。group_topic_Partition确定了唯一一个offset。由此可见offset是根据消费者组保存的，即**每个consumer是基于自己在commit log中的消费进度(offset)来进行工作的。在kafka中，offset 由 consumer 自己来维护；**一般情况下按照顺序逐条消费commit log中的消息，当然可以通过指定offset来重复消费某些消息， 或者跳过某些消息。而这意味kafka中的consumer对集群的影响是非常小的，添加一个或者减少一个consumer，对于集群或者其他consumer 来说，都是没有影响的，因为每个consumer维护各自的offset。**所以说kafka集群是无状态的，性能不会因为 consumer数量受太多影响。kafka还将很多关键信息记录在zookeeper里，保证自己的无状态，从而在水平扩容时非常方便。**
-
-consumer启动时会获取一次offset，而后在自己的内存中进行维护。
-
-### 获取 __consumer_offsets 队列
-
-Kafka 0.9 版本之前，consumer 默认将 offset 保存在 Zookeeper 中，从 0.9 版本开始， consumer 默认将 offset 保存在 Kafka 一个内置的 topic 中，该 topic 为__consumer_offsets。
-
-
-
-1）修改配置文件
-
-consumer.properties exclude.internal.topics=false
-
-2）读取 offset
-
-0.11.0.0 之前版本:
-
-```sh
-bin/kafka-console-consumer.sh --topic __consumer_offsets --zookeeper hadoop102:2181 --formatter "kafka.coordinator.GroupMetadataManager\$OffsetsMessageFormatter" --consumer.config config/consumer.properties --from-beginning
-```
-
-0.11.0.0 之后版本(含):
-
-```sh
-bin/kafka-console-consumer.sh --topic __consumer_offsets --zookeeper hadoop102:2181 --formatter "kafka.coordinator.group.GroupMetadataManager\$OffsetsMessageFormatter" --consumer.config config/consumer.properties --frombeginning
-```
-
-
-
-
-
 # zk中的节点说明
 
 - /brocker/ids

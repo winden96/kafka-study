@@ -101,6 +101,7 @@ Kafka借鉴了JMS规范的思想，但是确并没有完全遵循JMS规范。
 | Follower      | 每个主题多个副本中的“从”，实时从 leader 中同步数据，保持和 leader 数据的同步。 leader 发生故障时，某个 Follower 会成为新的 leader。 |
 | ISR           | 和 leader 保持同步的副本（含leader）集合。                   |
 | Controller    | Kafka核心总控制器。在Kafka集群中会有一个或者多个broker，其中有一个broker会被选举为控制器（Kafka Controller），它负责管理整个 集群中所有分区和副本的状态。1、当某个分区的leader副本出现故障时，由控制器负责为该分区选举新的leader副本。2、当检测到某个分区的ISR集合发生变化时，由控制器负责通知所有broker更新其元数据信息。3、当使用kafka-topics.sh脚本为某个topic增加分区数量时，同样还是由控制器负责分区的重新分配。 |
+| offset        | <br />一般情况下按照顺序逐条消费commit log中的消息，当然可以通过指定offset来重复消费某些消息， 或者跳过某些消息。<br /><br />consumer启动时会获取一次offset，而后在自己的内存中进行维护。<br /><br />Kafka 0.9 版本之前，consumer 默认将 offset 保存在 Zookeeper 中，从 0.9 版本开始， consumer 默认将 offset 保存在 Kafka 一个内置的 topic 中，该 topic 为__consumer_offsets。 |
 
 
 
@@ -1397,4 +1398,103 @@ a1.sinks.k1.channel = c1
 ```sh
 echo hello >> /opt/module/data/flume.log
 ```
+
+
+
+# Spring Boot整合Kafka
+
+引入spring boot kafka依赖
+
+```xml
+<dependency>
+    <groupId>org.springframework.kafka</groupId>
+    <artifactId>spring‐kafka</artifactId>
+</dependency>
+```
+
+
+
+application.yml配置如下：
+
+```yml
+server:
+  port: 8080
+
+spring:
+  kafka:
+    bootstrap-servers: 192.168.0.60:9092,192.168.0.60:9093,192.168.0.60:9094
+    producer: # 生产者
+      retries: 3 # 设置大于0的值，则客户端会将发送失败的记录重新发送
+      batch-size: 16384
+      buffer-memory: 33554432
+      # 指定消息key和消息体的编解码方式
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    consumer:
+      group-id: mygroup
+      enable-auto-commit: true
+```
+
+
+
+生产者
+
+```java
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class KafkaController {
+
+    @Autowired
+    private KafkaTemplate<String, String> kafkaTemplate;
+
+    @RequestMapping("/send")
+    public void send() {
+        kafkaTemplate.send("mytopic", 0, "key", "this is a msg");
+    }
+
+}
+```
+
+
+
+消费者
+
+```java
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.stereotype.Component;
+
+@Component
+public class MyConsumer {
+
+    /**
+     * @KafkaListener(groupId = "testGroup", topicPartitions = {
+     *             @TopicPartition(topic = "topic1", partitions = {"0", "1"}),
+     *             @TopicPartition(topic = "topic2", partitions = "0",
+     *                     partitionOffsets = @PartitionOffset(partition = "1", initialOffset = "100"))
+     *     },concurrency = "6")
+     *
+     *  concurrency：指定同组下的启动的消费者个数，也就是并发消费数，但是注意必须小于等于分区总数。
+     */
+    @KafkaListener(topics = "mytopic",groupId = "zhugeGroup")
+    public void listen(ConsumerRecord<String, String> record) {
+        String value = record.value();
+        System.out.println(value);
+        System.out.println(record);
+    }
+}
+
+```
+
+
+
+
+
+
+
+
 
