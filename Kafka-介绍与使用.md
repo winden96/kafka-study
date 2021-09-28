@@ -455,7 +455,7 @@ kafka_2.12-2.8.0/bin/kafka-topics.sh --zookeeper localhost:2181 --delete --topic
 
 
 
-# API 使用说明
+# API 使用
 
 ## 生产者和消费者配置项
 
@@ -1327,7 +1327,6 @@ kafka.eagle.password=000000
 export KE_HOME=/opt/module/eagle
 export PATH=$PATH:$KE_HOME/bin
 
-
 source /etc/profile
 ```
 
@@ -1348,6 +1347,12 @@ bin/ke.sh start
 账户：admin
 
 密码：123456
+
+
+
+## Kafka-manager
+
+安装及基本使用可参考：https://www.cnblogs.com/dadonggg/p/8205302.html
 
 
 

@@ -1,3 +1,22 @@
+# 生产者ACK应答机制
+
+对于某些不太重要的数据，对数据的可靠性要求不是很高，能够容忍数据的少量丢失，所以没必要等 ISR 中的 follower 全部接收成功。
+
+所以 Kafka 为用户提供了三种可靠性级别，用户根据对可靠性和延迟的要求进行权衡， 选择以下的配置。
+
+acks 参数配置：
+
+- 0：producer 不等待 broker 的 ack，这一操作提供了一个最低的延迟，broker 一接收到还没有写入磁盘就已经返回，当 broker 故障时有可能丢失数据；
+
+  一般在大数据的场景使用，例如：用户行为日志的统计。
+
+- 1：producer 等待 broker 的 ack，partition 的 leader 成功将数据写入本地后返回 ack，如果在 follower 同步成功之前 leader 故障，那么将会丢失数据；
+
+- -1（all）：producer 等待 broker 的 ack，分区的**min.insync.replicas**个副本全部落盘成功后才返回 ack。但是如果在 follower 同步完成后，broker 发送 ack 之前，leader 发生故障，那么会造成数据重复（因为leader在broker发送ack之前挂掉后，producer就不会接收到ack，那么producer就会重新发送数据，而此时新选举出来的leader中已经存储了该数据，所以就造成了数据的重复）。但是在极限情况下，这种模式还是会造成数据的丢失。例如：当zk中的ISR队列里只剩当前leader，一旦这个leader挂了，那么数据也就丢失了。
+  **一般是金融级别，或跟钱打交道的场景才会使用这种配置。**
+
+  **min.insync.replicas**代表最小要同步的副本数，默认为1，应该要配置1以上，因为如果为1的话其实就与ack设置为1的时候一样了。如果不能满足这个最小值，那么生产者将引发一个异常(NotEnoughReplicas或NotEnoughReplicasAfterAppend)。
+
 # 日志分段存储
 
 Kafka 一个分区的消息数据对应存储在一个文件夹下，以topic名称+分区号命名，kafka规定了一个分区内的 .log 文件 最大为 1G，做这个限制目的是为了方便把 .log 加载到内存去操作。
@@ -126,7 +145,11 @@ hash(consumer group id) % __consumer_offsets主题的分区数
 
 ## 介绍
 
-消费者rebalance就是说如果consumer group中某个消费者挂了，此时会自动把分配给他的分区交给其他的消费者，如 果他又重启了，那么又会把一些分区重新交还给他，如下情况可能会触发消费者rebalance
+消费者rebalance就是说如果consumer group中某个消费者挂了，此时会自动把分配给他的分区交给其他的消费者，如果他又重启了，那么又会把一些分区分配给他。
+
+
+
+## 触发rebalance情况
 
 - consumer所在服务重启或宕机了
 - 动态给topic增加了分区
@@ -138,9 +161,11 @@ hash(consumer group id) % __consumer_offsets主题的分区数
 
 当有消费者加入消费组时，消费者、消费组及组协调器之间会经历以下几个阶段。
 
-> 组协调器GroupCoordinator：每个consumer group都会选择一个**broker**作为自己的组协调器coordinator，负责监控这个消费组里的所有消费者的心跳，以及判断是否宕机，然后开启消费者rebalance。
+> 组协调器GroupCoordinator：每个consumer group都会选择一个**broker**作为自己的组协调器coordinator，负责监控这个消费组里的所有消费者的心跳，以及判断是否宕机，然后开启消费者rebalance（含选举consumer LeaderCoordinator）。
 >
 > 
+
+![](img-Kafka-原理分析/消费者Rebalance机制-Rebalance过程.png)
 
 **第一阶段：选择组协调器**
 
@@ -156,5 +181,380 @@ consumer group 中的每个consumer启动时会向kafka集群中的某个节点�
 
 **第二阶段：加入消费者组（JOIN GROUP）**
 
-在成功找到消费组所对应的 GroupCoordinator 之后就进入加入消费组的阶段，在此阶段的消费者会向 GroupCoordinator 发送 JoinGroupRequest 请求，并处理响应。然后GroupCoordinator 从一个 consumer group 中选择第一个加入group的consumer作为leader(消费组协调器)，把consumer group情况发送给这个leader，接着这个 leader会负责制定分区方案。
+在成功找到消费组所对应的 GroupCoordinator 之后就进入 加入消费组 的阶段，在此阶段的消费者会向 GroupCoordinator 发送 **JoinGroupRequest** 请求，并处理响应。然后 GroupCoordinator 从 consumer group 中选择第一个加入 group 的 consumer 作为 LeaderCoordinator (**消费组协调器**)，把consumer group情况发送给这个LeaderCoordinator，接着这个 leader会负责制定分区方案。
+
+
+
+**第三阶段（ SYNC GROUP)**
+
+consumer LeaderCoordinator 通过给GroupCoordinator发送 **SyncGroupRequest**，接着GroupCoordinator就把分区方案下发给各个consumer，他们会根据指定分区的leader broker进行网络连接以及消息消费。
+
+
+
+## 分区分配策略
+
+### 介绍
+
+一个 consumer group 中有多个 consumer，一个 topic 有多个 partition，所以必然会涉及到 partition 的分配问题，即确定哪个 partition 由哪个 consumer 来消费。
+
+Kafka 有三种分配策略：RoundRobin、Range 和 sticky。
+
+
+
+### Range
+
+默认分配策略
+
+以主题为单位进行划分，订阅的每个主题都会执行如下的分配规则：
+
+- 首先，将分区按分区序号排行序，消费者按名称的字典序排序。
+
+- 然后，用分区总数除以消费者总数。如果能够除尽，则平均分配；若除不尽，则位于排序前面的消费者将多负责一个分区。即假设 n＝分区数／消费者数量 = 3， m＝分区数%消费者数量 = 1，那么前 m 个（含m）消费者每个分配 n+1 个分区，后面的（消费者数量－m ）个消费者每个分配 n 个分区。
+
+  公式：
+  n = 单个主题分区数 / 消费者数
+  m = 单个主题分区数 % 消费者数
+
+  前m个（包括m）消费者消费n+1个分区，剩余消费者消费n个分区。
+
+
+
+分区分配的算法如下：
+
+```java
+@Override
+public  Map<String, List<TopicPartition>> assign(Map<String, Integer> partitionsPerTopic,
+                                                 Map<String, Subscription> subscriptions) {
+    Map<String, List<String>> consumersPerTopic = consumersPerTopic(subscriptions);
+    Map<String, List<TopicPartition>> assignment =  new  HashMap<>();
+    for  (String memberId : subscriptions.keySet())
+        assignment.put(memberId,  new  ArrayList<TopicPartition>());
+    //for循环对订阅的多个topic分别进行处理
+    for  (Map.Entry<String, List<String>> topicEntry : consumersPerTopic.entrySet()) {
+        String topic = topicEntry.getKey();
+        List<String> consumersForTopic = topicEntry.getValue();
+
+        Integer numPartitionsForTopic = partitionsPerTopic.get(topic);
+        if  (numPartitionsForTopic ==  null )
+            continue ;
+        //对消费者进行排序
+        Collections.sort(consumersForTopic);
+        //计算平均每个消费者分配的分区数
+        int  numPartitionsPerConsumer = numPartitionsForTopic / consumersForTopic.size();
+        //计算平均分配后多出的分区数
+        int  consumersWithExtraPartition = numPartitionsForTopic % consumersForTopic.size();
+
+        List<TopicPartition> partitions = AbstractPartitionAssignor.partitions(topic, numPartitionsForTopic);
+        for  ( int  i =  0 , n = consumersForTopic.size(); i < n; i++) {
+            //计算第i个消费者，分配分区的起始位置
+            int  start = numPartitionsPerConsumer * i + Math.min(i, consumersWithExtraPartition);
+            //计算第i个消费者，分配到的分区数量
+            int  length = numPartitionsPerConsumer + (i +  1  > consumersWithExtraPartition ?  0  :  1 );
+            assignment.get(consumersForTopic.get(i)).addAll(partitions.subList(start, start + length));
+        }
+    }
+    return  assignment;
+}
+```
+
+
+
+假设，有1个主题、10个分区、3个消费者线程， 10 / 3 = 3，而且除不尽，那么消费者C1将会多消费一个分区，分配结果是：
+
+- C1将消费T1主题的0、1、2、3分区。
+- C2将消费T1主题的4、5、6分区。
+- C3将消费T1主题的7、8、9分区
+
+
+
+假如，同一消费者组里的消费者C1和C2，订阅了2个主题（T0和T1），它们都有3个分区。
+
+分配过程：
+
+T0的分区数 / 消费者总数 = 3 / 2 = 1，除不尽余1，那么消费者C1将会多消费一个分区；
+
+T1的分区数 / 消费者总数 = 3 / 2 = 1，除不尽余1，那么消费者C1将会多消费一个分区；
+
+所以分配结果是：
+
+- C1将消费T0主题的 0、1 号分区，以及T1主题的 0、1 号分区。（T0-0，T0-1，T1-0，T1-1）
+- C2将消费T0主题的 2 号分区，以及T1主题的 2 号分区。（T0-2，T1-2）
+
+
+
+假设，同一消费者组里的消费者C1和C2，分别订阅了2个主题，C1订阅了T0，C2订阅了T1。
+
+分配结果：
+
+C1将消费T0的所有分区，C2将消费T1的所有分区。
+
+
+
+> 这种分配方式存在着明显的一个问题，随着消费者订阅的Topic的数量的增加，不均衡的问题会越来越严重。
+
+
+
+### RoundRobin
+
+轮询分配分区策略。
+
+以消费者组为单位进行划分
+
+把消费者组订阅的所有partition根据hash运算结果排序，然后轮询 consumer 为它们分配partition，尽可能的把partition均匀的分配给consumer。
+
+**1、如果同一个消费组内所有的消费者的订阅信息都是相同的，那么RoundRobinAssignor策略的分区分配会是均匀的。**
+
+假设消费组中有2个消费者C0和C1，都订阅了主题t0和t1，并且每个主题都有3个分区，那么所订阅的所有分区可以标识为：t0p0、t0p1、t0p2，t1p0、t1p1、t1p2。
+
+假设分区排序结果为：t0p0、t0p1、t0p2，t1p0、t1p1、t1p2。
+
+最终的分配结果为：
+
+消费者C0：t0p0、t0p2、t1p1
+
+消费者C1：t0p1、t1p0、t1p2
+
+**2、如果同一个消费组内的消费者所订阅的信息是不相同的，那么在执行分区分配的时候就不是完全的轮询分配，有可能会导致分区分配的不均匀。如果某个消费者没有订阅消费组内的某个topic，那么在分配分区的时候此消费者将分配不到这个topic的任何分区。**
+
+假如有3个Topic，T0（三个分区P0-0，P0-1，P0-2），T1(三个分区P1-0，P1-1，P1-2)，T2(三个分区P2-0，P2-1，P2-2)。
+
+有三个消费者：C0(订阅了T0),   C1（订阅了T0，T1），C2(订阅了T0，T1，T2)。
+
+那么分区过程如下：
+
+1）、通过哈希运算对消费者组的所有主题分区进行排序。假设排序后情况：P0-0，P0-1，P0-2，P1-0，P1-1，P1-2，P2-0，P2-1，P2-2。
+
+2）、轮询消费者，分配分区。分配过程如下：
+
+- P0-0分配给C0
+- P0-1分配给C1
+- P0-2分配给C2
+- P1-0分配给C0但是C0并没订阅T1，于是跳过C0把P1-0分配给C1，
+- P1-1分配给C2，
+- P1-2分配给C0但是C0并没订阅T1，于是跳过C0把P1-2分配给C1，
+- 依照如上步骤，T2的分区都会分配给C2。
+
+C0：P0-0
+C1：P1-0，P1-2
+C2：P1-1，P2-0，P2-1，P2-2
+
+可以发现C2承担了4个分区的消费还不够均衡，而C1订阅了T1，如果把 P1-1 交给C1消费能更加的均衡。
+
+> RoundRobin方式适用于消费者组里的消费者订阅的主题一致。
+
+
+
+### Sticky
+
+Kafka从0.11.x版本开始引入这种分配策略。
+
+它的目的是在执行一次新的分配时，能在上一次分配的结果的基础上，尽量少的调整分区分配的变动，节省因分区分配变化带来的开销。
+
+没有发生rebalance时，Sticky分配策略和RoundRobin分配策略类似。
+
+Sticky是“粘性的”，可以理解为分配结果是带“粘性的”——每一次分配变更相对上一次分配做最少的变动。其目标有两点：
+
+- 分区的分配要尽可能的均匀；
+- 在发生rebalance（重新分配分区）时，分区的分配尽可能的与上次分配的保持相同。
+
+当这两个目标发生冲突时，优先保证第一个目标。第一个目标是每个分配算法都尽量尝试去完成的，而第二个目标才真正体现出StickyAssignor特性的。
+
+举例：
+
+**消费者订阅相同 Topic**
+
+假设消费组内有3个消费者：C0、C1和C2，它们都订阅了4个主题：t0、t1、t2、t3，并且每个主题有2个分区，也就是说整个消费组订阅了t0p0、t0p1、t1p0、t1p1、t2p0、t2p1、t3p0、t3p1这8个分区。最终的分配结果如下：
+
+![](img-Kafka-基础/消费者分区策略-Sticky.png)
+
+消费者C0：t0p0、t1p1、t3p0
+消费者C1：t0p1、t2p0、t3p1
+消费者C2：t1p0、t2p1
+
+假设此时消费者C1脱离了消费组，那么消费组就会执行再平衡操作，进而消费分区会重新分配。如果采用RoundRobinAssignor策略，那么此时的分配结果如下：
+
+![](img-Kafka-基础/消费者分区策略-Sticky2.png)
+
+消费者C0：t0p0、t1p0、t2p0、t3p0
+消费者C2：t0p1、t1p1、t2p1、t3p1
+
+
+
+如分配结果所示，RoundRobinAssignor策略会按照消费者C0和C2进行重新轮询分配。而如果此时使用的是StickyAssignor策略，那么分配结果为：
+
+![](img-Kafka-基础/消费者分区策略-Sticky3.png)
+
+消费者C0：t0p0、t1p1、t3p0、t2p0
+消费者C2：t1p0、t2p1、t0p1、t3p1
+
+可以看到分配结果中保留了上一次分配中对于消费者C0和C2的所有分配结果，并将原来消费者C1的“负担”分配给了剩余的两个消费者C0和C2，最终C0和C2的分配还保持了均衡。
+
+如果发生分区重分配，那么对于同一个分区而言有可能之前的消费者和新指派的消费者不是同一个，对于之前消费者进行到一半的处理还要在新指派的消费者中再次复现一遍，这显然很浪费系统资源。StickyAssignor策略如同其名称中的“sticky”一样，让分配策略具备一定的“粘性”，尽可能地让前后两次分配相同，进而减少系统资源的损耗以及其它异常情况的发生。
+
+
+
+**消费者订阅不同 Topic**
+
+同样消费组内有3个消费者：C0、C1和C2，集群中有3个主题：t0、t1和t2，这3个主题分别有1、2、3个分区，也就是说集群中有t0p0、t1p0、t1p1、t2p0、t2p1、t2p2这6个分区。消费者C0订阅了主题t0，消费者C1订阅了主题t0和t1，消费者C2订阅了主题t0、t1和t2。
+
+如果此时采用RoundRobinAssignor策略，那么最终的分配结果如下所示：
+
+( 红线是订阅，其他颜色的线是分配分区 )
+
+![](img-Kafka-基础/消费者分区策略-Sticky4.png)
+
+消费者C0：t0p0
+消费者C1：t1p0
+消费者C2：t1p1、t2p0、t2p1、t2p2
+
+如果此时采用的是StickyAssignor策略，那么最终的分配结果为：
+( 红线是订阅，其他颜色的线是分配分区 )
+
+![](img-Kafka-基础/消费者分区策略-Sticky5.png)
+
+消费者C0：t0p0
+消费者C1：t1p0、t1p1
+消费者C2：t2p0、t2p1、t2p2
+
+可以看到这是一个最优解。
+
+
+
+假如此时消费者C0脱离了消费组，那么RoundRobin策略的分配结果为：
+( 红线是订阅，其他颜色的线是分配分区 )
+
+![](img-Kafka-基础/消费者分区策略-Sticky6.png)
+
+消费者C1：t0p0、t1p1
+消费者C2：t1p0、t2p0、t2p1、t2p2
+
+可以看到RoundRobinAssignor策略保留了消费者C1和C2中原有的3个分区的分配：t2p0、t2p1和t2p2
+
+而如果采用的是StickyAssignor策略，那么分配结果为：
+( 红线是订阅，其他颜色的线是分配分区 )
+
+![](img-Kafka-基础/消费者分区策略-Sticky7.png)
+
+消费者C1：t1p0、t1p1、t0p0
+消费者C2：t2p0、t2p1、t2p2
+
+可以看到StickyAssignor策略保留了消费者C1和C2中原有的5个分区的分配：t1p0、t1p1、t2p0、t2p1、t2p2。
+
+
+
+从结果上看StickyAssignor策略比另外两者分配策略而言显得更加的优异，这个策略的代码实现也是异常复杂，如果一个 group 里面，不同的 Consumer 订阅不同的 topic, 那么设置Sticky 分配策略还是很有必要的。
+
+
+
+# HW 和 LEO
+
+## 介绍
+
+HW（High Watermark，高水位）：取一个partition对应的ISR中最小的LEO(log-end-offset)作为HW。consumer最多只能消费到HW所在的位置。另外每个replica都有HW,leader和follower各自负责更新自己的HW的状态。对于leader新写入的消息，consumer不能立刻消费，**leader会等待该消息被所有ISR中的replicas同步后再更新HW**，此时消息才能被consumer消费。这样就保证了如果leader所在的broker失效，该消息仍然可以从新选举的leader中获取。对于来自内部broker的读取请求，没有HW的限制。
+
+LEO：指的是每个副本最大的 offset；
+
+
+
+## follower 更新 HW 的时机
+
+follower更新HW发生在其更新LEO之后，一旦follower向log写完数据，它会尝试更新它自己的HW值。具体算法就是比较当前 LEO 值与FETCH响应中 leader 的 HW 值，取两者中的小者作为新的 HW 值。这告诉我们一个事实：即使 follower 的LEO 值超过了 leader 的HW值，follower 的 HW 值也不会越过 leader 的 HW 值。
+
+
+
+## 正常情况下的HW更新过程
+
+当producer生产消息至broker后，ISR以及HW和LEO的流转过程：
+
+![](img-Kafka-原理分析/HW 和 LEO-正常情况下的HW更新过程.png)
+
+
+
+![](img-Kafka-原理分析/HW 和 LEO-正常情况下的HW更新过程2.png)
+
+
+
+![](img-Kafka-原理分析/HW 和 LEO-正常情况下的HW更新过程3.png)
+
+
+
+![](img-Kafka-原理分析/HW 和 LEO-正常情况下的HW更新过程4.png)
+
+
+
+
+
+
+
+
+
+## 注意
+
+**HW只能保证副本之间的数据一致性，并不能保证数据不丢失或者不重复。**
+
+# broker故障情况分析
+
+## follower 故障
+
+某个 follower 发生故障后会被临时踢出 ISR，待该 follower 恢复后，该 follower 会读取当前自身的 HW，并将 log 文件高于这个 HW 的部分截取掉，从 HW 开始向 leader 进行同步。等该 follower 的 LEO 大于等于该 leader 的  HW 时重新加入 ISR 。
+
+
+
+## leader 故障
+
+leader 发生故障之后，会从 ISR 中选出一个新的 leader，之后为保证多个副本之间的数据一致性，其余的 follower 会先将各自的 log 文件中高于自身 HW 的部分截掉，然后从新的 leader 同步数据。当原本的leader副本恢复后，它会先将log 文件中高于自身 HW 的部分截取掉，从自身的 HW 开始向新 leader 进行同步。等该 follower 的 LEO 大于等于该 leader 的  HW 时重新加入 ISR 。
+
+
+
+# 数据丢失情况分析
+
+## ACK=1
+
+![](img-Kafka-原理分析/HW 和 LEO-正常情况下的HW更新过程.png)
+
+
+
+![](img-Kafka-原理分析/HW 和 LEO-正常情况下的HW更新过程2.png)
+
+
+
+![](img-Kafka-原理分析/数据丢失情况分析-ACK=1.png)
+
+
+
+![](img-Kafka-原理分析/数据丢失情况分析-ACK=1-2.png)
+
+# 生产者发布消息机制
+
+## 写入方式
+
+producer 采用 push 模式将消息发布到 broker，每条消息都被 append 到 patition 的分段log文件中，顺序写磁盘（顺序写磁盘 效率比随机写内存要高，保障 kafka 吞吐率）。
+
+
+
+## 消息路由机制
+
+producer 发送消息到 broker 时，会根据分区算法选择将其存储到哪一个 partition。其路由机制为：
+
+- 指定了 patition，则直接使用；
+- 未指定 patition 但指定 key，通过对 key 的 value 进行hash 选出一个 patition。
+- patition 和 key 都未指定，使用轮询选出一个 patition。
+
+
+
+## 写入流程
+
+以ACK=-1，min.insync.replicas=2的情况为例。
+
+
+
+
+
+1. producer 先从 zookeeper 的 "/brokers/topics/某主题/partitions/某分区/state" 节点找到该 partition 的 leader。
+2. producer 将消息发送给该 leader。
+3. leader 将消息写入本地 log。
+4. followers 从 leader pull 消息，写入本地 log 后 向leader 发送 ACK。
+5. leader 收到所有 ISR 中的 replica 的 ACK 后，增加 HW（high watermark，最后 commit 的 offset） 并向 producer 发送 ACK。
+
+
 
