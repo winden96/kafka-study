@@ -546,7 +546,7 @@ producer 发送消息到 broker 时，会根据分区算法选择将其存储到
 
 以ACK=-1，min.insync.replicas=2的情况为例。
 
-
+![](img-Kafka-原理分析/生产者发布消息机制-写入流程.png)
 
 
 
