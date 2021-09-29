@@ -38,7 +38,7 @@
 
 ActiveMq的队列就是使用的这种模式。
 
-![](img-Kafka-基础\消息队列的消费模式-点对点.png)
+![](img-Kafka-介绍与使用\消息队列的消费模式-点对点.png)
 
 
 
@@ -100,6 +100,8 @@ Kafka借鉴了JMS规范的思想，但是确并没有完全遵循JMS规范。
 | Leader        | 每个主题多个副本的“主”，生产者发送数据的对象，以及消费者消费数据的对象都是 leader。 |
 | Follower      | 每个主题多个副本中的“从”，实时从 leader 中同步数据，保持和 leader 数据的同步。 leader 发生故障时，某个 Follower 会成为新的 leader。 |
 | ISR           | 和 leader 保持同步的副本（含leader）集合。                   |
+| OSR           | 不和 leader 保持同步的 follower 集合。                       |
+| AR            | 所有的副本集合。AR = ISR + OSR                               |
 | Controller    | Kafka核心总控制器。在Kafka集群中会有一个或者多个broker，其中有一个broker会被选举为控制器（Kafka Controller），它负责管理整个 集群中所有分区和副本的状态。作用：1、当某个分区的leader副本出现故障时，由控制器负责为该分区选举新的leader副本。2、当检测到某个分区的ISR集合发生变化时，由控制器负责通知所有broker更新其元数据信息。3、当某个topic增加分区数量时，由控制器负责分区的重新分配。 |
 | offset        | 消息的偏移量，每条消息都有对应的offset。一般情况下按照顺序逐条消费commit log中的消息，当然可以通过指定offset来重复消费某些消息， 或者跳过某些消息。 |
 
@@ -107,27 +109,9 @@ Kafka借鉴了JMS规范的思想，但是确并没有完全遵循JMS规范。
 
 # Kafka架构
 
-## 服务端架构
-
-
-
-
-
-## 客户端架构
-
-
-
-# Kafka工作流程
-
 服务端(brokers)和客户端(producer、consumer)之间通信通过TCP协议来完成。
 
-![](img-Kafka-基础\Kafka基础架构.png)
-
-![](img-Kafka-基础/Kafka工作流程及文件存储机制.png)
-
-每个 partition 对应数个分区存储目录，分区目录中存在者log文件，该 log 文件中存储的就是 producer 生产的数据。Producer 生产的数据会被不断追加到该 log 文件末端，且每条数据都有自己的 offset。消费者组中的每个消费者，都会实时记录自己 消费到了哪个 offset，以便出错恢复时，从上次的位置继续消费。
-
-
+![](img-Kafka-介绍与使用\Kafka基础架构.png)
 
 **消费者组的作用**
 
@@ -146,6 +130,12 @@ Kafka借鉴了JMS规范的思想，但是确并没有完全遵循JMS规范。
 0.9版本之后（包括0.9），消费者关闭时的消息偏移量存储在了kafka中（kafka会创建Topic用来保存这些偏移量）。
 
 
+
+# Kafka工作流程
+
+![](img-Kafka-介绍与使用/Kafka工作流程及文件存储机制.png)
+
+每个 partition 对应数个分区存储目录，分区目录中存在者log文件，该 log 文件中存储的就是 producer 生产的数据。Producer 生产的数据会被不断追加到该 log 文件末端，且每条数据都有自己的 offset。消费者组中的每个消费者，都会实时记录自己 消费到了哪个 offset，以便出错恢复时，从上次的位置继续消费。
 
 # 数据可靠性保证
 
@@ -169,18 +159,20 @@ Leader 维护一个动态的 in-sync replica set (ISR)，意为和 leader 保持
 
 ## Exactly Once
 
+Exactly Once 解决的是单次会话单个分区里的数据重复问题。例如：因为网络波动导致的消息重试发送情况。
+
 将服务器的 ACK 级别设置为-1，可以保证 Producer 到 Server 之间不会丢失数据，即 At Least Once 语义。相对的，将服务器 ACK 级别设置为 0，可以保证生产者每条消息只会被发送一次，即 At Most Once 语义。
 
-At Least Once 可以保证数据不丢失，但是不能保证数据不重复；相对的，At Least Once 可以保证数据不重复，但是不能保证数据不丢失。但是，对于一些非常重要的信息，比如说 交易数据，下游数据消费者要求**数据既不重复也不丢失**，即 Exactly Once 语义。在 0.11 版本以前的 Kafka，对此是无能为力的，只能保证数据不丢失，再在下游消费者对数据做全局去重。对于多个下游应用的情况，每个都需要单独做全局去重，这就对性能造成了很大影响。
+At Least Once 可以保证数据不丢失，但是不能保证数据不重复；相对的，At Least Once 可以保证数据不重复，但是不能保证数据不丢失。但是，对于一些非常重要的信息，比如说 交易数据，下游数据消费者要求**数据既不重复也不丢失**，即 Exactly Once 语义。在 0.11 版本以前的 Kafka，对此是无能为力的，只能保证数据不丢失，在下游消费者对数据做全局去重。对于多个下游应用的情况，每个都需要单独做全局去重，这就对性能造成了很大影响。
 
 0.11 版本的 Kafka，引入了一项重大特性：幂等性。所谓的幂等性就是指 Producer 不论向 Server 发送多少次重复数据，Server 端都只会持久化一条。幂等性结合 At Least Once 语 义，就构成了 Kafka 的 Exactly Once 语义。即：
 At Least Once + 幂等性 = Exactly Once
 
 要启用幂等性，只需要将 Producer 的参数中 enable.idompotence 设置为 true 即可（开启幂等性后ack默认置为-1）。
 
-Kafka 的幂等性实现其实就是将原来下游需要做的去重放在了数据上游。开启幂等性的 Producer 在 初始化的时候会被分配一个 PID，发往同一 Partition 的消息会附带 Sequence Number。而 Broker 端会对 <PID, Partition, SeqNumber> （这个其实就是主键）做缓存，当具有相同主键的消息提交时，Broker 只会持久化一条。
+Kafka 的幂等性实现其实就是将原来下游需要做的去重放在了数据上游。开启幂等性的 Producer 在初始化的时候会被分配一个 PID，发往同一 Partition 的消息会附带 Sequence Number。而 Broker 端会对 <PID, Partition, SeqNumber> （这个其实就是主键）做缓存，当具有相同主键的消息提交时，Broker 只会持久化一条。
 
-但是生产者重启它的 PID 就会变化，所以幂等性只能解决单次会话单个分区里的数据重复问题，即幂等性无法保证跨 分区跨会话的 Exactly Once。
+但是生产者重启它的 PID 就会变化，所以幂等性只能解决单次会话单个分区里的数据重复问题，即幂等性无法保证跨分区跨会话的 Exactly Once。
 
 
 
@@ -392,7 +384,7 @@ kafka_2.12-2.8.0/bin/kafka-topics.sh --zookeeper localhost:2181 --list
 kafka_2.12-2.8.0/bin/kafka-topics.sh --zookeeper localhost:2181 --describe --topic first
 ```
 
-![](img-Kafka-基础/Kafka常用命令-R-查看某个 Topic 的详情.png)
+![](img-Kafka-介绍与使用/Kafka常用命令-R-查看某个 Topic 的详情.png)
 
 - leader节点负责给定partition的所有读写请求。
 - replicas 表示某个partition在哪几个broker上存在备份。不管这个几点是不是”leader“，甚至这个节点挂了，也会列出。 
@@ -556,7 +548,7 @@ https://kafka.apache.org/11/documentation.html#producerconfigs
 | ProducerConfig.ACKS_CONFIG                   | 配置生产者的应答机制。                                       | 1                                         |
 | ProducerConfig.RETRIES_CONFIG                | 失败重试次数，重试能保证消息发送的可靠性，但是也可能造成消息重复发送，比如网络抖动，所以需要在接收者那 边做好消息接收的幂等性处理 | 0                                         |
 | ProducerConfig.RETRY_BACKOFF_MS_CONFIG       | 失败重试间隔                                                 | 100ms                                     |
-| ProducerConfig.BUFFER_MEMORY_CONFIG          | 设置本地缓冲区，如果设置了该缓冲区，消息会先发送到本地缓冲区，可以提高消息发送性能。 | 33554432byte，即32MB                      |
+| ProducerConfig.BUFFER_MEMORY_CONFIG          | 设置本地缓冲区大小。发送消息时消息会先发送到本地缓冲区，可以提高消息发送性能。 | 33554432byte，即32MB                      |
 | ProducerConfig.BATCH_SIZE_CONFIG             | 设置批量发送消息的大小。kafka本地线程会从缓冲区取数据，批量发送到broker | 16384byte，即16kb                         |
 | ProducerConfig.LINGER_MS_CONFIG              | 设置消息发送最大延迟。一般设置100毫秒左右。即如果100毫秒内，某个batch不满足设定的批量发送大小，那么这个batch也会被发送出去。 | 0，即消息必须立即被发送，但这样会影响性能 |
 | ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG | 把发送的key从指定类型序列化为字节数组                        |                                           |
@@ -1133,7 +1125,11 @@ consumer启动时会获取一次offset，而后在自己的内存中进行维护
 
 
 
-## 自定义 Interceptor
+## 分区器、序列化器、拦截器
+
+执行顺序：拦截器、序列化器、分区器
+
+### 自定义 Interceptor
 
 Producer 拦截器(interceptor)是在 Kafka 0.10 版本被引入的，主要用于实现 clients 端的定 制化控制逻辑。
 
@@ -1262,7 +1258,9 @@ public class TestInterceptor {
 
 # 重点
 
-某个主题的副本数指的是某个实例中它的某个分区leader 加上 其他实例中对应那个实例的主题分区的follwer 的数量。（以上图为例：topicA的副本数=broker1的topicA的分区1的Leader+broker2中的topicA的分区1的follower=2）
+topic的分区数只能增加不能减少，因为kafka只提供了分区增加时的处理方式，而没有提供删除分区时分区中数据的处理方式。
+
+某个主题的副本数指的是某个实例中它的某个分区leader 加上其他实例中对应那个实例的主题分区的follwer 的数量。（以上图为例：topicA的副本数=broker1的topicA的分区1的Leader+broker2中的topicA的分区1的follower=2）
 
 副本数不能超过实例数量。
 
@@ -1274,29 +1272,15 @@ kafka以日志形式存储消息。
 
 生产者可以往一个不存在的主题发送消息，kafka会自动创建这个主题，分区数和副本数默认都是1，可以在service.properties中配置。
 
-partition  的 segment 的 index 和 log 文件以当前 segment 的第一条消息的 offset 命名。
-
-index文件里每条记录的大小是固定的，便于查询，只需把大小和偏移量相乘便可得到当前偏移量所对应的索引记录。（即定长索引来定位不定长数据）
-
-通过二分查找法查找index文件中的内容。
-
-为保证 producer 发送的数据，能可靠的发送到指定的 topic，topic 的每个 partition 收到 producer 发送的数据后，都需要向 producer 发送 ack（acknowledgement 确认收到），如果 producer 收到 ack，就会进行下一轮的发送，**否则重新发送数据**。
-
 ISR队列由leader维护，同时kafka在zk中存储了ISR，保证了leader挂了之后也能正常运行。ISR在zk中的主要存储路径/brokers/topics。
-
-Leader 发生故障之后，就会从 ISR 中选举新的 leader。
-
-HW之前的数据才对Consumer可见。
 
 log的partitions分布在kafka集群中不同的broker上，每个broker可以请求备份其他broker上partition上的数据。kafka 集群支持配置一个partition备份的数量。
 
-针对每个partition，都有一个broker起到“leader”的作用，0个或多个其他的broker作为“follwers”的作用。
-
 leader处理所有的针对这个partition的读写请求，而followers被动复制leader的结果。如果这个leader失效了，其中 的一个follower将会自动的变成新的leader。
 
-生产者将消息发送到topic中去，同时负责选择将message发送到topic的哪一个partition中。通过round­robin做简单的 负载均衡。也可以根据消息中的某一个关键字来进行区分。通常第二种方式使用的更多。
+消费者提交消费位移时提交的是当前消费到的最新消息的 offset+1。
 
-
+生产者客户端使用2个线程来处理，分别是main线程和send线程。即发送消息是使用独立线程来执行的。
 
 # Kafka基准测试
 

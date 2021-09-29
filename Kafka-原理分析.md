@@ -23,7 +23,7 @@ kafka数据存储在磁盘中，默认保存7天。
 
 Kafka 一个分区的消息数据对应存储在一个文件夹下，以topic名称+分区号命名，kafka规定了一个分区内的 .log 文件 最大为 1G，做这个限制目的是为了方便把 .log 加载到内存去操作。
 
-![](img-Kafka-基础/Kafka工作流程及文件存储机制2.png)
+![](img-Kafka-原理分析/日志分段存储.png)
 
 segment：消息分段，由.index、.log 和 .timeindex组成，而他们的**文件名代表了当前文件的起始offset**。根据service.properties文件中的 log.segment.bytes （该选项指定了日志文件的大小，默认是1G）配置的值进行分段，即当前分段的.log文件大小达到了log.segment.bytes设定的值，那么就会创建新的分段，也就是新的.index、.log 和 .timeindex 文件。
 
@@ -58,7 +58,7 @@ index文件里每条记录的大小是固定的，便于查询，只需把大小
 
 先通过offset确定消息处在分区的哪个分段里，再通过index文件定位到offset段，获取该offset段的的起始offset对应的log文件的物理偏移地址，最后根据这个物理偏移地址到当前分段的 log 文件中查找消息。
 
-![](img-Kafka-基础/Kafka工作流程及文件存储机制3.png)
+![](img-Kafka-原理分析/日志分段存储2.png)
 
 “.index”文件存储大量的索引信息，“.log”文件存储大量的数据，索引文件中的元 数据指向对应数据文件中 message 的物理偏移地址。
 
@@ -110,6 +110,12 @@ consumerGroupId+topic+分区号确定了唯一的offset，它表示当前消费�
 一般情况下按照顺序逐条消费commit log中的消息，当然可以通过指定offset来重复消费某些消息， 或者跳过某些消息。
 
 consumer启动时会获取一次offset，而后在自己的内存中进行维护。
+
+
+
+## 提交的offset值
+
+消费者提交消费位移时提交的是当前消费到的最新消息的 offset+1。
 
 
 
@@ -375,7 +381,7 @@ Sticky是“粘性的”，可以理解为分配结果是带“粘性的”—�
 
 假设消费组内有3个消费者：C0、C1和C2，它们都订阅了4个主题：t0、t1、t2、t3，并且每个主题有2个分区，也就是说整个消费组订阅了t0p0、t0p1、t1p0、t1p1、t2p0、t2p1、t3p0、t3p1这8个分区。最终的分配结果如下：
 
-![](img-Kafka-基础/消费者分区策略-Sticky.png)
+![](img-Kafka-原理分析/消费者分区策略-Sticky.png)
 
 消费者C0：t0p0、t1p1、t3p0
 消费者C1：t0p1、t2p0、t3p1
@@ -383,7 +389,7 @@ Sticky是“粘性的”，可以理解为分配结果是带“粘性的”—�
 
 假设此时消费者C1脱离了消费组，那么消费组就会执行再平衡操作，进而消费分区会重新分配。如果采用RoundRobinAssignor策略，那么此时的分配结果如下：
 
-![](img-Kafka-基础/消费者分区策略-Sticky2.png)
+![](img-Kafka-原理分析/消费者分区策略-Sticky2.png)
 
 消费者C0：t0p0、t1p0、t2p0、t3p0
 消费者C2：t0p1、t1p1、t2p1、t3p1
@@ -392,7 +398,7 @@ Sticky是“粘性的”，可以理解为分配结果是带“粘性的”—�
 
 如分配结果所示，RoundRobinAssignor策略会按照消费者C0和C2进行重新轮询分配。而如果此时使用的是StickyAssignor策略，那么分配结果为：
 
-![](img-Kafka-基础/消费者分区策略-Sticky3.png)
+![](img-Kafka-原理分析/消费者分区策略-Sticky3.png)
 
 消费者C0：t0p0、t1p1、t3p0、t2p0
 消费者C2：t1p0、t2p1、t0p1、t3p1
@@ -411,7 +417,7 @@ Sticky是“粘性的”，可以理解为分配结果是带“粘性的”—�
 
 ( 红线是订阅，其他颜色的线是分配分区 )
 
-![](img-Kafka-基础/消费者分区策略-Sticky4.png)
+![](img-Kafka-原理分析/消费者分区策略-Sticky4.png)
 
 消费者C0：t0p0
 消费者C1：t1p0
@@ -420,7 +426,7 @@ Sticky是“粘性的”，可以理解为分配结果是带“粘性的”—�
 如果此时采用的是StickyAssignor策略，那么最终的分配结果为：
 ( 红线是订阅，其他颜色的线是分配分区 )
 
-![](img-Kafka-基础/消费者分区策略-Sticky5.png)
+![](img-Kafka-原理分析/消费者分区策略-Sticky5.png)
 
 消费者C0：t0p0
 消费者C1：t1p0、t1p1
@@ -433,7 +439,7 @@ Sticky是“粘性的”，可以理解为分配结果是带“粘性的”—�
 假如此时消费者C0脱离了消费组，那么RoundRobin策略的分配结果为：
 ( 红线是订阅，其他颜色的线是分配分区 )
 
-![](img-Kafka-基础/消费者分区策略-Sticky6.png)
+![](img-Kafka-原理分析/消费者分区策略-Sticky6.png)
 
 消费者C1：t0p0、t1p1
 消费者C2：t1p0、t2p0、t2p1、t2p2
@@ -443,7 +449,7 @@ Sticky是“粘性的”，可以理解为分配结果是带“粘性的”—�
 而如果采用的是StickyAssignor策略，那么分配结果为：
 ( 红线是订阅，其他颜色的线是分配分区 )
 
-![](img-Kafka-基础/消费者分区策略-Sticky7.png)
+![](img-Kafka-原理分析/消费者分区策略-Sticky7.png)
 
 消费者C1：t1p0、t1p1、t0p0
 消费者C2：t2p0、t2p1、t2p2
@@ -504,12 +510,6 @@ leader的HW值就是分区HW值，因此何时更新这个值是我们最关心�
 
 
 ![](img-Kafka-原理分析/HW 和 LEO-正常情况下的HW更新过程4.png)
-
-
-
-
-
-
 
 
 
@@ -575,11 +575,42 @@ producer 发送消息到 broker 时，会根据分区算法选择将其存储到
 
 
 
-1. producer 先从 zookeeper 的 "/brokers/topics/某主题/partitions/某分区/state" 节点找到该 partition 的 leader。
-2. producer 将消息发送给该 leader。
-3. leader 将消息写入本地 log。
-4. followers 从 leader pull 消息，写入本地 log 后 向leader 发送 ACK。
-5. leader 收到所有 ISR 中的 replica 的 ACK 后，增加 HW（high watermark，最后 commit 的 offset） 并向 producer 发送 ACK。
+1. producer发送消息时消息会先发送到本地缓冲区，而批量发送线程会从这个缓冲区里获取消息，当满足两个条件（1、多条消息容量达到ProducerConfig.BATCH_SIZE_CONFIG设置的大小，2、距离上一次发送的延迟时间达到ProducerConfig.LINGER_MS_CONFIG设置的值）中的任意一个时，就会触发真正的发送。
+2. producer 先从 zookeeper 的 "/brokers/topics/某主题/partitions/某分区/state" 节点找到该 partition 的 leader。
+3. producer 将消息发送给该 leader。
+4. leader 将消息写入本地 log。
+5. followers 从 leader pull 消息，写入本地 log 后 向leader 发送 ACK。
+6. leader 收到所有 ISR 中的 replica 的 ACK 后，增加 HW（high watermark，最后 commit 的 offset） 并向 producer 发送 ACK。
+
+
+
+# 创建主题流程
+
+1）会在 zookeeper 中的/brokers/topics 节点下创建一个新的 topic 节点，如： /brokers/topics/first。
+
+2）触发 Controller 的监听程序。
+
+3）kafka Controller 负责 topic 的创建工作，并更新 metadata cache。
+
+
+
+# 事务
+
+Kafka 从 0.11 版本开始引入了事务支持。事务可以保证 Kafka 在 Exactly Once 语义的基 础上，生产和消费可以跨分区和会话，要么全部成功，要么全部失败。
+
+
+
+## Producer 事务
+
+为了实现跨分区跨会话的事务，需要引入一个全局唯一的 Transaction ID，并将 Producer 获得的PID 和Transaction ID 绑定。这样当Producer 重启后就可以通过正在进行的 Transaction ID 获得原来的 PID。
+
+为了管理 Transaction，Kafka 引入了一个新的组件 Transaction Coordinator。Producer 就 是通过和 Transaction Coordinator 交互获得 Transaction ID 对应的任务状态。Transaction Coordinator 还负责将事务所有写入 Kafka 的一个内部 Topic，这样即使整个服务重启，由于 事务状态得到保存，进行中的事务状态可以得到恢复，从而继续进行。
+
+
+
+## Consumer 事务
+
+上述事务机制主要是从 Producer 方面考虑，对于 Consumer 而言，事务的保证就会相对较弱，尤其时无法保证 Commit 的信息被精确消费。这是由于 Consumer 可以通过 offset 访 问任意信息，而且不同的 Segment File 生命周期不同，同一事务的消息可能会出现重启后被 删除的情况。
 
 
 
