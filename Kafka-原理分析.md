@@ -19,6 +19,8 @@ acks 参数配置：
 
 # 日志分段存储
 
+kafka数据存储在磁盘中，默认保存7天。
+
 Kafka 一个分区的消息数据对应存储在一个文件夹下，以topic名称+分区号命名，kafka规定了一个分区内的 .log 文件 最大为 1G，做这个限制目的是为了方便把 .log 加载到内存去操作。
 
 ![](img-Kafka-基础/Kafka工作流程及文件存储机制2.png)
@@ -64,13 +66,21 @@ index文件里每条记录的大小是固定的，便于查询，只需把大小
 
 ## 选举机制
 
-在kafka集群启动的时候，会自动选举一台broker作为controller来管理整个集群，选举的过程是集群中每个broker都会 尝试在zookeeper上创建一个 /controller 临时节点，zookeeper会保证有且仅有一个broker能创建成功，这个broker 就会成为集群的总控器controller。当这个controller角色的broker宕机了，此时zookeeper临时节点会消失，集群里其他broker会一直监听这个临时节 点，发现临时节点消失了，就会再次尝试竞争创建临时节点。
+在kafka集群启动的时候，会自动选举一台broker作为controller来管理整个集群，选举的过程是集群中每个broker都会尝试在zookeeper上创建一个 /controller 临时节点，zookeeper会保证有且仅有一个broker能创建成功，这个broker 就会成为集群的总控器controller。当这个controller角色的broker宕机了，此时zookeeper临时节点会消失，集群里其他broker会一直监听这个临时节点，发现临时节点消失了，就会再次尝试竞争创建临时节点。
 
 
 
 ## 职责
 
-具备控制器身份的broker需要比其他普通的broker多一份职责，具体细节如下：
+具备控制器身份的broker需要比其他普通的broker具备的作用如下：
+
+1、当某个分区的leader副本出现故障时，由控制器负责为该分区选举新的leader副本。
+
+2、当检测到某个分区的ISR集合发生变化时，由控制器负责通知所有broker更新其元数据信息。
+
+3、当某个topic增加分区数量时，由控制器负责分区的重新分配。
+
+具体细节如下：
 
 - 监听broker相关的变化。为Zookeeper中的/brokers/ids/节点添加BrokerChangeListener，用来处理 broker 增减的变化。
 - 监听topic相关的变化。为Zookeeper中的/brokers/topics节点添加TopicChangeListener，用来处理topic增减的变化；为Zookeeper中的/admin/delete_topics节点添加TopicDeletionListener，用来处理删除topic的动作。
@@ -81,7 +91,7 @@ index文件里每条记录的大小是固定的，便于查询，只需把大小
 
 # Partition的副本Leader选举机制
 
-例如：某个分区leader所在的broker挂了，由于controller注册了监听broker节点的事件，所以会感知到有broker挂了，而后controller会从它自身存储的 parititon 的 replicas 列表中取出第一个broker作为leader，当然这个broker需要也同时存在于ISR列表里。
+例如：某个分区leader所在的broker挂了，由于controller注册了监听broker节点的事件，所以会感知到有broker挂了，而后controller会从 parititon 的 replicas 列表中取出第一个broker作为leader，当然这个broker需要也同时存在于ISR列表里。
 
 
 
@@ -456,9 +466,24 @@ LEO：指的是每个副本最大的 offset；
 
 
 
-## follower 更新 HW 的时机
+## follower 更新 HW 时机
 
 follower更新HW发生在其更新LEO之后，一旦follower向log写完数据，它会尝试更新它自己的HW值。具体算法就是比较当前 LEO 值与FETCH响应中 leader 的 HW 值，取两者中的小者作为新的 HW 值。这告诉我们一个事实：即使 follower 的LEO 值超过了 leader 的HW值，follower 的 HW 值也不会越过 leader 的 HW 值。
+
+
+
+## leader 更新 HW 时机
+
+leader的HW值就是分区HW值，因此何时更新这个值是我们最关心的，因为它直接影响了分区数据对于consumer的可见性 。以下4种情况下leader会尝试去更新分区HW——切记是尝试，有可能因为不满足条件而不做任何更新：
+
+- 副本成为leader副本时：当某个副本成为了分区的leader副本，Kafka会尝试去更新分区HW。这是显而易见的道理，毕竟分区leader发生了变更，这个副本的状态是一定要检查的！
+- broker出现崩溃导致副本被踢出ISR时：若有broker崩溃则必须查看下是否会波及此分区，因此检查下分区HW值是否需要更新是有必要的。
+- producer向leader副本写入消息时：因为写入消息会更新leader的LEO，故有必要再查看下HW值是否也需要修改
+- leader处理follower FETCH请求时：当leader处理follower的FETCH请求时首先会从底层的log读取数据，之后会尝试更新分区HW值
+
+ 特别注意上面4个条件中的最后两个。它揭示了一个事实——当Kafka broker都正常工作时，分区HW值的更新时机有两个：leader处理PRODUCE请求时和leader处理FETCH请求时。
+
+具体：https://www.cnblogs.com/huxi2b/p/7453543.html
 
 
 
@@ -532,13 +557,13 @@ producer 采用 push 模式将消息发布到 broker，每条消息都被 append
 
 
 
-## 消息路由机制
+## 消息路由机制（分区分配）
 
 producer 发送消息到 broker 时，会根据分区算法选择将其存储到哪一个 partition。其路由机制为：
 
 - 指定了 patition，则直接使用；
-- 未指定 patition 但指定 key，通过对 key 的 value 进行hash 选出一个 patition。
-- patition 和 key 都未指定，使用轮询选出一个 patition。
+- 未指定 patition 但指定 key，通过将 key 的 hash 值与 topic 的 partition 数进行取余得到 partition 值。
+- patition 和 key 都未指定，第一次调用时随机生成一个整数（后面每次调用在这个整数上自增），将这个值与 topic 可用的 partition 总数取余得到 partition 值，也就是常说的 round-robin 算法。（其实就是使用轮询算法选出一个 patition。）
 
 
 
