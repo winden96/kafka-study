@@ -6,13 +6,13 @@
 
 acks 参数配置：
 
-- 0：producer 不等待 broker 的 ack，这一操作提供了一个最低的延迟，broker 一接收到还没有写入磁盘就已经返回，当 broker 故障时有可能丢失数据；
+- 0：**producer 不等待 broker 的 ack**，这一操作提供了一个最低的延迟，broker 一接收到还没有写入磁盘就已经返回，当 broker 故障时有可能丢失数据；
 
   一般在大数据的场景使用，例如：用户行为日志的统计。
 
-- 1：producer 等待 broker 的 ack，partition 的 leader 成功将数据写入本地后返回 ack，如果在 follower 同步成功之前 leader 故障，那么将会丢失数据；
+- 1：producer 等待 broker 的 ack，**partition 的 leader 成功将数据写入本地后返回 ack，如果在 follower 同步成功之前 leader 故障，那么将会丢失数据**；
 
-- -1（all）：producer 等待 broker 的 ack，分区的**min.insync.replicas**个副本全部落盘成功后才返回 ack。但是如果在 follower 同步完成后，broker 发送 ack 之前，leader 发生故障，那么会造成数据重复（因为leader在broker发送ack之前挂掉后，producer就不会接收到ack，那么producer就会重新发送数据，而此时新选举出来的leader中已经存储了该数据，所以就造成了数据的重复）。但是在极限情况下，这种模式还是会造成数据的丢失。例如：当zk中的ISR队列里只剩当前leader，一旦这个leader挂了，那么数据也就丢失了。
+- -1（all）：producer 等待 broker 的 ack，分区的**min.insync.replicas**个副本全部落盘成功后才返回 ack。但是如果在 follower 同步完成后，**broker 发送 ack 之前，leader 发生故障，那么会造成数据重复（因为leader在broker发送ack之前挂掉后，producer就不会接收到ack，那么producer就会重新发送数据，而此时新选举出来的leader中已经存储了该数据，所以就造成了数据的重复）**。但是在极限情况下，这种模式还是会造成数据的丢失。例如：当zk中的ISR队列里只剩当前leader，一旦这个leader挂了，那么数据也就丢失了。
   **一般是金融级别，或跟钱打交道的场景才会使用这种配置。**
 
   **min.insync.replicas**代表最小要同步的副本数，默认为1，应该要配置1以上，因为如果为1的话其实就与ack设置为1的时候一样了。如果不能满足这个最小值，那么生产者将引发一个异常(NotEnoughReplicas或NotEnoughReplicasAfterAppend)。
@@ -25,6 +25,8 @@ Kafka 一个分区的消息数据对应存储在一个文件夹下，以topic名
 
 ![](img-Kafka-原理分析/日志分段存储.png)
 
+![](img-Kafka-原理分析/存储.png)
+
 segment：消息分段，由.index、.log 和 .timeindex组成，而他们的**文件名代表了当前文件的起始offset**。根据service.properties文件中的 log.segment.bytes （该选项指定了日志文件的大小，默认是1G）配置的值进行分段，即当前分段的.log文件大小达到了log.segment.bytes设定的值，那么就会创建新的分段，也就是新的.index、.log 和 .timeindex 文件。
 
 由于生产者生产的消息会不断追加到 log 文件末尾，为防止 log 文件过大导致数据定位效率低下，Kafka 采取了分片和索引机制，将每个 partition 分为多个 segment。同一分区的所有分段文件都位于同一个文件夹下（即 **topic名称+分区号** 目录下）。例如，first 这个 topic 有三个分区，则其对应的文件夹为 first-0,first-1,first-2。
@@ -35,8 +37,11 @@ index文件里每条记录的大小是固定的，便于查询，只需把大小
 
 注意：早期的kafka没有.timeindex文件，只有 .index 和 .log 。
 
+
+
+`.index`是当前分段（以这个例子来说就是 [0, 5367851) 分段）的offset索引文件，kafka生产者客户端往分区发送的消息达到4K(可配置)，kafka就会记录一条当前消息的offset到index文件，即当前文件不会每条消息offset都记录，**它只会记录一个批次中的最后一条消息的offset值+1和它对应log文件中的物理偏移地址，也就是说记录的是offset段。**
+
 ```
-# .index是当前分段（以这个例子来说就是 [0, 5367851) 分段）的offset索引文件，kafka生产者客户端往分区发送的消息达到4K(可配置)，kafka就会记录一条当前消息的offset到index文件，即当前文件不会每条消息offset都记录，它只会记录一个批次中的最后一条消息的offset值+1和它对应log文件中的物理偏移地址，也就是说记录的是offset段。
 # 如果要定位消息的offset会先在这个文件里快速定位到对应offset区间的起始值，再去log文件里找具体消息
 00000000000000000000.index
 # 消息存储文件，主要存offset和消息体
@@ -54,19 +59,59 @@ index文件里每条记录的大小是固定的，便于查询，只需把大小
 00000000000009936472.timeindex
 ```
 
-通过二分查找法查找index文件中的内容。
+**通过二分查找法查找index文件中的内容。**
 
-先通过offset确定消息处在分区的哪个分段里，再通过index文件定位到offset段，获取该offset段的的起始offset对应的log文件的物理偏移地址，最后根据这个物理偏移地址到当前分段的 log 文件中查找消息。
+先通过offset确定消息处在分区的哪个分段里，再通过index文件定位到offset段，**获取该offset段的的起始offset对应的log文件的物理偏移地址，最后根据这个物理偏移地址到当前分段的 log 文件中查找消息。**
 
 ![](img-Kafka-原理分析/日志分段存储2.png)
 
-“.index”文件存储大量的索引信息，“.log”文件存储大量的数据，索引文件中的元 数据指向对应数据文件中 message 的物理偏移地址。
+**“.index”文件存储大量的索引信息，“.log”文件存储大量的数据，索引文件中的元 数据指向对应数据文件中 message 的物理偏移地址。**
+
+## 日志清理
+
+kafka 日志管理器允许定制删除策略，目前的策略是**删除修改时间在N天前的日志（按时间删除）**
+
+也可以使用：保留最后的 N GB 数据的策略（按大小删除）。为了避免在删除时阻塞读操作，采用了 copy-on-write 的形式实现。删除操作进行时，读取操作的二分查找时在一个静态的快照副本上进行的
+
+删除思想：把 topic 中的一个 partition 大文件分成多个小文件，通过多个小文件段，很容器清除或删除已经消费完的文件，减少磁盘占用
+
+```
+启用删除策略
+log.cleanup.policy=delete
+#专门的日志删除任务来周期性检测和删除不符合保留条件的日志分段文件，默认300000ms，5分钟
+log.retention.check.interval.ms=300000
+#可配置以下两个策略：
+#1、清理超过指定时间清理： 
+log.retention.hours=16
+#2、超过指定大小后，删除旧的消息;默认值为-1，表示无穷大；
+log.retention.bytes=1073741824
+ 
+注意：#log.retention.bytes和log.retention.hours任意一个达到要求，都会执行删除，会被topic创建时的指定参数覆盖
+```
+
+
+
+## 日志压缩
+
+```java
+#1、是否开启日志压缩
+log.cleaner.enable=true
+#2、启用日志压缩策略
+log.cleanup.policy=compact
+```
+
+![](img-Kafka-原理分析/日志压缩.png)
+
+(1)压缩后的offset可能是不连续的，比如上图中没有5和7，因为这些offset的消息被merge了，当从这些offset消费消息时，将会拿到比这个offset大的offset对应的消息，比如，当试图获取offset为5的消息时，实际上会拿到offset为6的消息，并从这个位置开始消费。
+
+(2)压缩策略支持删除，当某个Key的最新版本的消息没有内容时，这个Key将被删除，这也符合以上逻辑。
+
 
 # Controller 
 
 ## 选举机制
 
-在kafka集群启动的时候，会自动选举一台broker作为controller来管理整个集群，选举的过程是集群中每个broker都会尝试在zookeeper上创建一个 /controller 临时节点，zookeeper会保证有且仅有一个broker能创建成功，这个broker 就会成为集群的总控器controller。当这个controller角色的broker宕机了，此时zookeeper临时节点会消失，集群里其他broker会一直监听这个临时节点，发现临时节点消失了，就会再次尝试竞争创建临时节点。
+在kafka集群启动的时候，会自动选举一台broker作为controller来管理整个集群，选举的过程是集群中每个broker都会尝试在zookeeper上创建一个 /controller 临时节点，**zookeeper会保证有且仅有一个broker能创建成功，这个broker 就会成为集群的总控器controller**。当这个controller角色的broker宕机了，此时zookeeper临时节点会消失，集群里其他broker会一直监听这个临时节点，发现临时节点消失了，就会再次尝试竞争创建临时节点。
 
 
 
@@ -82,7 +127,7 @@ index文件里每条记录的大小是固定的，便于查询，只需把大小
 
 具体细节如下：
 
-- 监听broker相关的变化。为Zookeeper中的/brokers/ids/节点添加BrokerChangeListener，用来处理 broker 增减的变化。
+- **监听broker相关的变化。为Zookeeper中的/brokers/ids/节点添加BrokerChangeListener，用来处理 broker 增减的变化。**
 - 监听topic相关的变化。为Zookeeper中的/brokers/topics节点添加TopicChangeListener，用来处理topic增减的变化；为Zookeeper中的/admin/delete_topics节点添加TopicDeletionListener，用来处理删除topic的动作。
 - 从Zookeeper中读取获取当前所有与topic、partition以及broker有关的信息并进行相应的管理。对于所有 topic 所对应的Zookeeper中的/brokers/topics/[topic]节点添加PartitionModificationsListener，用来监听topic中的分区分配变化。
 - 更新集群的元数据信息，同步到其他普通的broker节点中。
@@ -219,13 +264,13 @@ Kafka 有三种分配策略：RoundRobin、Range 和 sticky。
 
 ### Range
 
-默认分配策略
+**默认分配策略**
 
 以主题为单位进行划分，订阅的每个主题都会执行如下的分配规则：
 
 - 首先，将分区按分区序号排行序，消费者按名称的字典序排序。
 
-- 然后，用分区总数除以消费者总数。如果能够除尽，则平均分配；若除不尽，则位于排序前面的消费者将多负责一个分区。即假设 n＝分区数／消费者数量 = 3， m＝分区数%消费者数量 = 1，那么前 m 个（含m）消费者每个分配 n+1 个分区，后面的（消费者数量－m ）个消费者每个分配 n 个分区。
+- 然后，**用分区总数除以消费者总数。如果能够除尽，则平均分配；若除不尽，则位于排序前面的消费者将多负责一个分区。**即假设 n＝分区数／消费者数量 = 3， m＝分区数%消费者数量 = 1，那么前 m 个（含m）消费者每个分配 n+1 个分区，后面的（消费者数量－m ）个消费者每个分配 n 个分区。
 
   公式：
   n = 单个主题分区数 / 消费者数
@@ -316,7 +361,7 @@ C1将消费T0的所有分区，C2将消费T1的所有分区。
 
 以消费者组为单位进行划分
 
-把消费者组订阅的所有partition根据hash运算结果排序，然后轮询 consumer 为它们分配partition，尽可能的把partition均匀的分配给consumer。
+把消费者组订阅的所有partition根据hash运算结果排序，然后**轮询 consumer 为它们分配partition**，尽可能的把partition均匀的分配给consumer。
 
 **1、如果同一个消费组内所有的消费者的订阅信息都是相同的，那么RoundRobinAssignor策略的分区分配会是均匀的。**
 
@@ -371,9 +416,7 @@ Kafka从0.11.x版本开始引入这种分配策略。
 Sticky是“粘性的”，可以理解为分配结果是带“粘性的”——每一次分配变更相对上一次分配做最少的变动。其目标有两点：
 
 - 分区的分配要尽可能的均匀；
-- 在发生rebalance（重新分配分区）时，分区的分配尽可能的与上次分配的保持相同。
-
-当这两个目标发生冲突时，优先保证第一个目标。第一个目标是每个分配算法都尽量尝试去完成的，而第二个目标才真正体现出StickyAssignor特性的。
+- 在发生rebalance（重新分配分区）时，分区的分配尽可能的与上次分配的保持相同。当这两个目标发生冲突时，优先保证第一个目标。第一个目标是每个分配算法都尽量尝试去完成的，而第二个目标才真正体现出StickyAssignor特性的。
 
 举例：
 
@@ -466,7 +509,7 @@ Sticky是“粘性的”，可以理解为分配结果是带“粘性的”—�
 
 ## 介绍
 
-HW（High Watermark，高水位）：取一个partition对应的ISR中最小的LEO(log-end-offset)作为HW。consumer最多只能消费到HW所在的位置。另外每个replica都有HW,leader和follower各自负责更新自己的HW的状态。对于leader新写入的消息，consumer不能立刻消费，**leader会等待该消息被所有ISR中的replicas同步后再更新HW**，此时消息才能被consumer消费。这样就保证了如果leader所在的broker失效，该消息仍然可以从新选举的leader中获取。对于来自内部broker的读取请求，没有HW的限制。
+HW（High Watermark，高水位）：取一个partition对应的ISR中最小的LEO(log-end-offset)作为HW。consumer最多只能消费到HW所在的位置。另外每个replica都有HW,leader和follower各自负责更新自己的HW的状态。对于**leader新写入的消息，consumer不能立刻消费**，**leader会等待该消息被所有ISR中的replicas同步后再更新HW**，此时消息才能被consumer消费。这样就保证了如果leader所在的broker失效，该消息仍然可以从新选举的leader中获取。对于来自内部broker的读取请求，没有HW的限制。
 
 LEO：指的是每个副本最大的 offset；
 
@@ -474,7 +517,7 @@ LEO：指的是每个副本最大的 offset；
 
 ## follower 更新 HW 时机
 
-follower更新HW发生在其更新LEO之后，一旦follower向log写完数据，它会尝试更新它自己的HW值。具体算法就是比较当前 LEO 值与FETCH响应中 leader 的 HW 值，取两者中的小者作为新的 HW 值。这告诉我们一个事实：即使 follower 的LEO 值超过了 leader 的HW值，follower 的 HW 值也不会越过 leader 的 HW 值。
+**follower更新HW发生在其更新LEO之后，一旦follower向log写完数据，它会尝试更新它自己的HW值**。具体算法就是比较当前 LEO 值与FETCH响应中 leader 的 HW 值，取两者中的小者作为新的 HW 值。这告诉我们一个事实：即使 follower 的LEO 值超过了 leader 的HW值，follower 的 HW 值也不会越过 leader 的 HW 值。
 
 
 
@@ -521,13 +564,13 @@ leader的HW值就是分区HW值，因此何时更新这个值是我们最关心�
 
 ## follower 故障
 
-某个 follower 发生故障后会被临时踢出 ISR，待该 follower 恢复后，该 follower 会读取当前自身的 HW，并将 log 文件高于这个 HW 的部分截取掉，从 HW 开始向 leader 进行同步。等该 follower 的 LEO 大于等于该 leader 的  HW 时重新加入 ISR 。
+某个 follower 发生故障后会被临时踢出 ISR，待该 follower 恢复后，该 follower 会读取当前自身的 HW，**并将 log 文件高于这个 HW 的部分截取掉，从 HW 开始向 leader 进行同步。等该 follower 的 LEO 大于等于该 leader 的  HW 时重新加入 ISR 。**
 
 
 
 ## leader 故障
 
-leader 发生故障之后，会从 ISR 中选出一个新的 leader，之后为保证多个副本之间的数据一致性，其余的 follower 会先将各自的 log 文件中高于自身 HW 的部分截掉，然后从新的 leader 同步数据。当原本的leader副本恢复后，它会先将log 文件中高于自身 HW 的部分截取掉，从自身的 HW 开始向新 leader 进行同步。等该 follower 的 LEO 大于等于该 leader 的  HW 时重新加入 ISR 。
+leader 发生故障之后，会从 ISR 中选出一个新的 leader，之后为保证多个副本之间的数据一致性，**其余的 follower 会先将各自的 log 文件中高于自身 HW 的部分截掉，然后从新的 leader 同步数据。当原本的leader副本恢复后，它会先将log 文件中高于自身 HW 的部分截取掉，从自身的 HW 开始向新 leader 进行同步。等该 follower 的 LEO 大于等于该 leader 的  HW 时重新加入 ISR 。**
 
 
 
@@ -553,7 +596,7 @@ leader 发生故障之后，会从 ISR 中选出一个新的 leader，之后为�
 
 ## 写入方式
 
-producer 采用 push 模式将消息发布到 broker，每条消息都被 append 到 patition 的分段log文件中，顺序写磁盘（顺序写磁盘 效率比随机写内存要高，保障 kafka 吞吐率）。
+producer 采用 **push 模式将消息发布到 broker，每条消息都被 append 到 patition 的分段log文件中，顺序写磁盘（顺序写磁盘 效率比随机写内存要高，保障 kafka 吞吐率）。**
 
 
 
@@ -605,6 +648,57 @@ Kafka 从 0.11 版本开始引入了事务支持。事务可以保证 Kafka 在 
 为了实现跨分区跨会话的事务，需要引入一个全局唯一的 Transaction ID，并将 Producer 获得的PID 和Transaction ID 绑定。这样当Producer 重启后就可以通过正在进行的 Transaction ID 获得原来的 PID。
 
 为了管理 Transaction，Kafka 引入了一个新的组件 Transaction Coordinator。Producer 就 是通过和 Transaction Coordinator 交互获得 Transaction ID 对应的任务状态。Transaction Coordinator 还负责将事务所有写入 Kafka 的一个内部 Topic，这样即使整个服务重启，由于 事务状态得到保存，进行中的事务状态可以得到恢复，从而继续进行。
+
+
+
+设置`properties.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);`  不过这个默认就是 true，如果显示为 false，会抛出异常
+
+```java
+/**
+ * 配置事务
+ */
+public class ProducerTransactionSend {
+
+    public static final String topic = "heima";
+    public static final String brokerList = "182.xxx:9092";
+  	// 事务 id
+    public static final String transactionId = "transactionId";
+
+    public static void main(String[] args) {
+        Properties properties = new Properties();
+        properties.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+        properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+
+        properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, brokerList);
+        properties.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, transactionId);
+        properties.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+
+        KafkaProducer<String, String> producer = new KafkaProducer<>(properties);
+
+        // 初始化事务
+        producer.initTransactions();
+        // 开启事务
+        producer.beginTransaction();
+        try {
+            ProducerRecord<String, String> record1 = new ProducerRecord<>(topic, "message-1");
+            producer.send(record1);
+            ProducerRecord<String, String> record2 = new ProducerRecord<>(topic, "message-2");
+            producer.send(record2);
+            ProducerRecord<String, String> record3 = new ProducerRecord<>(topic, "message-3");
+            producer.send(record3);
+        } catch (Exception e) {
+            producer.abortTransaction();
+        }
+
+        // 结束事务
+        producer.close();
+    }
+
+}
+
+```
+
+要么全部成功，要么全部失败，一条消息都没有抛出，此外还可直接通过 `@Transactional` 注解实现
 
 
 

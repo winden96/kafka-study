@@ -1,3 +1,7 @@
+
+
+> 以上参考 https://gitee.com/zhangfaquan_java/Kafka，结合黑马的视频和一些博客，只做学习使用
+
 # 消息队列介绍
 
 ## 优点
@@ -95,7 +99,7 @@ Kafka借鉴了JMS规范的思想，但是确并没有完全遵循JMS规范。
 | Producer      | 消息生产者，向Broker发送消息的客户端。                       |
 | Consumer      | 消息消费者，从Broker读取消息的客户端。                       |
 | ConsumerGroup | 每个Consumer属于一个特定的Consumer Group，消费者组内每个消费者负责消费不同分区的数据，一个分区只能由一个组内消费者消费；消费者组之间互不影响，消费者组是逻辑上的一个订阅者。即一条消息可以被多个不同的 Consumer Group消费，但是一个 Consumer Group中只能有一个Consumer 能够消费该消息。 |
-| Partition     | 物理上的概念，为了实现扩展性，一个非常大的 topic 可以分布到多个 broker上，一个 topic 可以分为多个 partition，**每个 partition 是一个有序的队列**。这些队列中的message按顺序添加到一个叫做commit log的文件中。每个partition中的消息都有一个唯一的编号，称之为offset，用来唯一标识某个分区中的message，但是不同的 partition中的message的offset可能是相同的。 |
+| Partition     | 物理上的概念，为了实现扩展性，**一个非常大的 topic 可以分布到多个 broker上，一个 topic 可以分为多个 partition**，**每个 partition 是一个有序的队列**。这些队列中的message按顺序添加到一个叫做commit log的文件中。每个partition中的消息都有一个唯一的编号，称之为offset，用来唯一标识某个分区中的message，但是不同的 partition中的message的offset可能是相同的。 |
 | Replica       | 副本（Replication），为保证集群中的某个节点发生故障时， 该节点上的 partition 数据不丢失，且 Kafka仍然能够继续工作， Kafka 提供了副本机制，一个 topic 的每个分区都有若干个副本，一个 leader 和若干个 follower。某个主题的副本数指的是某个broker中它的某个分区leader 加上其他broker中这个leader的follwer 的数量。**注意副本数不能超过实例数量。** |
 | Leader        | 每个主题多个副本的“主”，生产者发送数据的对象，以及消费者消费数据的对象都是 leader。 |
 | Follower      | 每个主题多个副本中的“从”，实时从 leader 中同步数据，保持和 leader 数据的同步。 leader 发生故障时，某个 Follower 会成为新的 leader。 |
@@ -119,15 +123,27 @@ Kafka借鉴了JMS规范的思想，但是确并没有完全遵循JMS规范。
 
 一般来说，消费者数和同一个主题的分区数相等时是最好的。
 
+同一个消费组当中只能消费一条消息
+
 
 
 **zk作用**
 
-存储kafka集群信息。只要多个kafka进程连的是同一个zk集群，那么他们就可以构建成一个集群。
+**存储kafka集群信息**。只要多个kafka进程连的是同一个zk集群，那么他们就可以构建成一个集群。
 
 0.9版本之前，zk中记录了每个消费者关闭时的消息偏移量（消费到了那条记录），这样消费者一旦重启就可以继续消费。
 
-0.9版本之后（包括0.9），消费者关闭时的消息偏移量存储在了kafka中（kafka会创建Topic用来保存这些偏移量）。
+0.9版本之后（包括0.9），**消费者关闭时的消息偏移量存储在了kafka中**（kafka会创建Topic用来保存这些偏移量）。
+
+
+
+# kafka 基本说明
+
+## 磁盘存储优势
+
+kafka 在设计的时候，采用文件追加的方式写入消息，即只能在日志文件的尾部追加新的消息，并且不允许修改已经写入的消息，这种方式属于典型的顺序写入此判断的操作，就算是 kafka 使用磁盘作为存储介质，实现的吞吐量也非常可观
+
+![](img-Kafka-原理分析/磁盘.png)
 
 
 
@@ -135,23 +151,25 @@ Kafka借鉴了JMS规范的思想，但是确并没有完全遵循JMS规范。
 
 ![](img-Kafka-介绍与使用/Kafka工作流程及文件存储机制.png)
 
-每个 partition 对应数个分区存储目录，分区目录中存在者log文件，该 log 文件中存储的就是 producer 生产的数据。Producer 生产的数据会被不断追加到该 log 文件末端，且每条数据都有自己的 offset。消费者组中的每个消费者，都会实时记录自己 消费到了哪个 offset，以便出错恢复时，从上次的位置继续消费。
+每个 partition 对应数个分区存储目录，分区目录中存在者log文件，**该 log 文件中存储的就是 producer 生产的数据**。Producer 生产的数据会被不断追加到该 log 文件末端，且每条数据都有自己的 offset。消费者组中的每个消费者，都会实时记录自己 消费到了哪个 offset，以便出错恢复时，从上次的位置继续消费。
+
+
 
 # 数据可靠性保证
 
 ## 副本数据同步策略
 
-为保证集群中的某个节点发生故障时， 该节点上的 partition 数据不丢失，且 Kafka仍然能够继续工作， Kafka 提供了副本机制，一个 topic 的每个分区都有若干个副本，一个 leader 和若干个 follower。
+为保证集群中的某个节点发生故障时， 该节点上的 partition 数据不丢失，且 Kafka仍然能够继续工作， Kafka 提供了副本机制，一个 topic 的每个partition都有若干个副本，一个 leader 和若干个 follower。
 
 
 
 ## ISR
 
-设想以下情景：leader 收到数据，所有 follower 都开始同步数据， 但有一个 follower，因为某种故障，迟迟不能与 leader 进行同步，那 leader 就要一直等下去， 直到它完成同步，才能发送 ack。这个问题怎么解决呢？
+（副本的集合）设想以下情景：leader 收到数据，所有 follower 都开始同步数据， 但有一个 follower，因为某种故障，迟迟不能与 leader 进行同步，那 leader 就要一直等下去， 直到它完成同步，才能发送 ack。这个问题怎么解决呢？
 
 解决方案：
 
-Leader 维护一个动态的 in-sync replica set (ISR)，意为和 leader 保持同步的副本（含leader）集合。当 ISR 中的 follower 完成数据的同步之后，leader 就会给 follower 发送 ack。如果 follower 长时间未向 leader 同步数据 ， 则该 follower 将被踢出 ISR ， 该时间阈值由 replica.lag.time.max.ms 参数设定。**Leader 发生故障之后，controller就会从 parititon 的 replicas 列表中取出第一个broker作为leader，当然这个broker需要也同时存在于ISR列表里。**
+Leader 维护一个动态的 in-sync replica set (ISR)，意为和 leader 保持同步的副本（含leader）集合。**当 ISR 中的 follower 完成数据的同步之后，leader 就会给 follower 发送 ack**。如果 follower 长时间未向 leader 同步数据 ， 则该 follower 将被踢出 ISR (因为太慢了，不希望她拖慢速度，故移除)， 该时间阈值由 replica.lag.time.max.ms 参数设定。**Leader 发生故障之后，controller就会从 parititon 的 replicas 列表中取出第一个broker作为leader，当然这个broker需要也同时存在于ISR列表里。**
 
 **那么问题来了，这个ISR是由leader维护，leader挂了ISR怎么办呢？所以Kafka会在ZK中存储这个ISR！**
 
@@ -159,20 +177,20 @@ Leader 维护一个动态的 in-sync replica set (ISR)，意为和 leader 保持
 
 ## Exactly Once
 
-Exactly Once 解决的是单次会话单个分区里的数据重复问题。例如：因为网络波动导致的消息重试发送情况。
+Exactly Once 解决的是**单次会话单个分区里的数据重复问题**。例如：因为网络波动导致的消息重试发送情况。
 
 将服务器的 ACK 级别设置为-1，可以保证 Producer 到 Server 之间不会丢失数据，即 At Least Once 语义。相对的，将服务器 ACK 级别设置为 0，可以保证生产者每条消息只会被发送一次，即 At Most Once 语义。
 
 At Least Once 可以保证数据不丢失，但是不能保证数据不重复；相对的，At Least Once 可以保证数据不重复，但是不能保证数据不丢失。但是，对于一些非常重要的信息，比如说 交易数据，下游数据消费者要求**数据既不重复也不丢失**，即 Exactly Once 语义。在 0.11 版本以前的 Kafka，对此是无能为力的，只能保证数据不丢失，在下游消费者对数据做全局去重。对于多个下游应用的情况，每个都需要单独做全局去重，这就对性能造成了很大影响。
 
-0.11 版本的 Kafka，引入了一项重大特性：幂等性。所谓的幂等性就是指 Producer 不论向 Server 发送多少次重复数据，Server 端都只会持久化一条。幂等性结合 At Least Once 语 义，就构成了 Kafka 的 Exactly Once 语义。即：
+0.11 版本的 Kafka，引入了一项重大特性：**幂等性**。所谓的幂等性就是指 Producer 不论向 Server 发送多少次重复数据，Server 端都只会持久化一条。幂等性结合 At Least Once 语 义，就构成了 Kafka 的 Exactly Once 语义。即：
 At Least Once + 幂等性 = Exactly Once
 
 要启用幂等性，只需要将 Producer 的参数中 enable.idompotence 设置为 true 即可（开启幂等性后ack默认置为-1）。
 
-Kafka 的幂等性实现其实就是将原来下游需要做的去重放在了数据上游。开启幂等性的 Producer 在初始化的时候会被分配一个 PID，发往同一 Partition 的消息会附带 Sequence Number。而 Broker 端会对 <PID, Partition, SeqNumber> （这个其实就是主键）做缓存，当具有相同主键的消息提交时，Broker 只会持久化一条。
+Kafka 的幂等性实现其实就是将原来下游需要做的去重放在了数据上游。**开启幂等性的 Producer 在初始化的时候会被分配一个 PID，发往同一 Partition 的消息会附带 Sequence Number。而 Broker 端会对 <PID, Partition, SeqNumber> （这个其实就是主键）做缓存，当具有相同主键的消息提交时，Broker 只会持久化一条，所以说kafka自己就做了幂等性的操作**
 
-但是生产者重启它的 PID 就会变化，所以幂等性只能解决单次会话单个分区里的数据重复问题，即幂等性无法保证跨分区跨会话的 Exactly Once。
+但是**生产者重启它的 PID 就会变化，所以幂等性只能解决单次会话单个分区里的数据重复问题**，即幂等性无法保证跨分区跨会话的 Exactly Once。
 
 
 
@@ -180,13 +198,24 @@ Kafka 的幂等性实现其实就是将原来下游需要做的去重放在了�
 
 查看《Kafka-原理分析.md》中的 HW 和 LEO 一节。
 
+HW ：High Water 最高水位，标识了一个特定的 offset, 消费者只能拉取到这个 offset 之前的消息
+
+LEO：Log End Offset 数据日志文件结束偏移量，记录了该副本底层日志（log）中下一条消息的位移值，比如LEO=10,表示该副本保存了10条消息，位移值范围为 [0, 9]
+
+涉及到副本同步原理 https://blog.csdn.net/madongyu1259892936/article/details/99596335
+
+为什么需要有短板效应？
+想象一下，Leader 有100数据，Follower 1只有80条，Follower 2能力较差，只有50条同步过来了。由于每个副本的LEO偏移量肯定不一样，用户消费如果根据长板来看，直接消费Leader的100，Leader挂掉，换成Follower 1继续服务，重复发了80～100的20条重复数据，Follower 1忽然又挂掉，换成Follower 2继续服务，又消费一对重复数据，这明显是很恶心的事情。而短板机制，就能够限制住用户只能消费50，毕竟大家都是同个学校的同学，肯定要相互理解相互帮扶才行～
+同步复制要求所有能工作的Follower副本都复制完，这条消息才会被确认为成功提交，这种复制方式影响了性能。而在异步复制的情况下， follower副本异步地从leader副本中复制数据，数据只要被leader副本写入就被认为已经成功提交。在这种情况下，如果follower副本都没有复制完而落后于leader副本，如果突然leader副本宕机，则会造成数据丢失。Kafka使用这种ISR的方式有效的权衡了数据可靠性与性能之间的关系。
+原文链接：https://blog.csdn.net/whiteBearClimb/article/details/111479791
+
 
 
 # 高效读写数据
 
 ## 顺序写磁盘
 
-Kafka 的 producer 生产数据，要写入到 log 文件中，写的过程是一直追加到文件末端， 为顺序写。官网有数据表明，同样的磁盘，顺序写能到 600M/s，而随机写只有 100K/s。这与磁盘的机械机构有关，顺序写之所以快，是因为其省去了大量磁头寻址的时间。
+Kafka 的 producer 生产数据，要写入到 log 文件中，写的过程是一直追加到文件末端， **为顺序写**。官网有数据表明，同样的磁盘，顺序写能到 600M/s，而随机写只有 100K/s。这与磁盘的机械机构有关，顺序写之所以快，是因为其省去了大量磁头寻址的时间。
 
 
 
@@ -226,6 +255,8 @@ Kafka官方下载地址：http://kafka.apache.org/downloads
 
 server.properties文件中的 log.dirs 指定了kafka数据的存储路径，主题数据就是存储在这个目录下。主题的存储格式是：主题名-分区号。（注意副本也是存储在这个目录下，且格式一致。）
 
+![](img-Kafka-介绍与使用/Kafka的logs.png)
+
 日志文件目录（logs）中的 server.log 就是kafka的程序运行日志。
 
 ## 配置文件解析
@@ -237,6 +268,7 @@ https://kafka.apache.org/11/documentation.html#brokerconfigs
 broker.id=0
 
 # 这两个配置默认被注释。他们都可以用来配置kafka实例运行地址。默认端口是9092。区别是listeners只支持内网，advertised.listeners支持内外网区分。例如：1、在公司搭建的 kafka 集群，只有内网中的服务可以用，这种情况下，只需要用 listeners 就行。2、在 docker 中或者 在类似阿里云主机上部署 kafka 集群，这种情况下是 需要用到 advertised_listeners。
+# 监听器列表——用逗号分隔的uri列表，我们要监听的uri和监听器名称。如果侦听器名称不是安全协议，则还必须设置listener.security.protocol.map。指定主机名为0.0.0.0，与所有接口绑定。保留主机名为空以绑定到默认接口。合法监听列表示例:PLAINTEXT://myhost:9092,SSL://:9091 CLIENT://0.0.0.0:9092,REPLICATION://localhost:9093
 listeners=PLAINTEXT://192.168.136.151:9092
 advertised.listeners=PLAINTEXT://192.168.136.151:9092
 
@@ -262,6 +294,9 @@ num.recovery.threads.per.data.dir=1
 log.retention.hours=168
 #配置连接 Zookeeper 集群地址，默认为localhost:2181
 zookeeper.connect=hadoop102:2181,hadoop103:2181,hadoop104:2181
+# 服务器接受单个消息的最大大小，默认1000012约为976.6KB
+message.max.bytes=1000012
+
 ```
 
 
@@ -287,7 +322,7 @@ vim kafka_2.12-2.8.0/config/server.properties
 # 1、修改broker.id分别为0，1，2
 # 2、修改log.dirs为/usr/local/kafka_2.12-2.8.0/kafka-logs，如果是单机伪集群的部署方式，那么可以指向各自的kafka家目录。
 # 3、配置zookeeper.connect。
-# 4、如果是单机伪集群的部署方式，那么需要配置 listeners 为PLAINTEXT://192.168.136.151:9092、PLAINTEXT://192.168.136.151:9093、=PLAINTEXT://192.168.136.151:9094
+# 4、如果是单机伪集群的部署方式，那么需要配置 listeners 为PLAINTEXT://192.168.136.151:9092, PLAINTEXT://192.168.136.151:9093, PLAINTEXT://192.168.136.151:9094
 ```
 
 
@@ -317,6 +352,36 @@ kafka_2.12-2.8.0/bin/kafka-server-stop.sh
 ```
 
 
+
+# Kafka 集群
+
+在同一个机器上的话，就是将kafka拷贝，然后再修改server.properties里面的broker.id, logs, listeners（保证ip和端口至少有一个不一样）,其他无需改变
+
+![](img-Kafka-介绍与使用/集群.png)
+
+
+
+创建3分区3副本集
+
+![](img-Kafka-介绍与使用/集群创建.png)
+
+查看对应的描述
+
+![](img-Kafka-介绍与使用/集群描述.png)
+
+## 分区重新分配
+
+
+
+更改分区大小
+
+![](img-Kafka-介绍与使用/更改分区.png)
+
+可见节点3需要承受更大的压力，不均衡，若新增节点，那么新增的节点并不会感知到原有的，因此还是节点2承受更大的压力，可以采用kafka_partition_reassignment.sh进行重新分配
+
+![](img-Kafka-介绍与使用/重新分配.png)
+
+重新分配分区：https://blog.csdn.net/forrest_ou/article/details/79141391
 
 # Kafka常用脚本命令
 
@@ -362,6 +427,12 @@ kafka_2.12-2.8.0/bin/kafka-console-producer.sh --broker-list localhost:9092 --to
 
 
 ## R
+
+bootstrap-servers指的是目标集群的服务器地址，这个和broker-list功能是一样的，只不过我们在console producer要求用后者。
+
+broker-list为老的，笔者更贴近于的说法是：忘了改了或者是懒得改了，认为这样没有必要。
+
+https://blog.51cto.com/u_15127513/2682947
 
 **查看当前服务器中的所有 topic**
 
@@ -451,7 +522,7 @@ bin/kafka‐console‐consumer.sh ‐‐bootstrap‐server 192.168.0.60:9092 ‐
 
 **多播消费**
 
-一条消息能被多个消费者消费的模式，类似publish-subscribe模式费，针对Kafka同一条消息只能被同一个消费组下的某一个消 费者消费的特性，要实现多播只要保证这些消费者属于不同的消费组即可。我们再增加一个消费者，该消费者属于testGroup-2消费 组，结果两个客户端都能收到消息。
+一条消息能被多个消费者消费的模式，类似publish-subscribe模式费，针对Kafka**同一条消息只能被同一个消费组下的某一个消 费者消费**的特性，要实现多播只要保证这些消费者属于不同的消费组即可。我们再增加一个消费者，该消费者属于testGroup-2消费 组，结果两个客户端都能收到消息。
 
 ```sh
 bin/kafka‐console‐consumer.sh ‐‐bootstrap‐server 192.168.0.60:9092 ‐-consumer‐property group.id=testGroup ‐‐topic test
@@ -480,7 +551,7 @@ localhost:2181 --alter --topic first --partitions 6
 kafka_2.12-2.8.0/bin/kafka-topics.sh --zookeeper localhost:2181 --delete --topic first
 ```
 
-需要 server.properties 中设置 delete.topic.enable=true 否则只是标记删除。
+**需要 server.properties 中设置 delete.topic.enable=true 否则只是标记删除，在重启 Kafka server 后删除。**
 
 
 
@@ -572,6 +643,9 @@ https://kafka.apache.org/11/documentation.html#consumerconfigs
 | ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG     | 如果两次poll操作间隔超过了这个时间，broker就会认为这个consumer处理能力太弱， 会将其踢出消费组，将分区分配给别的consumer消费。 | 300000ms     |
 | ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG   | 把发送的key从指定类型序列化为字节数组                        |              |
 | ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG | 把发送消息value从指定类型序列化为字节数组                    |              |
+| fetch.max.wait.ms                              | 指定了消费者读取时最长等待时间，从而避免长时间阻塞           |              |
+| fetch.min.bytes                                | 允许消费者制定从 broker 读取消息时最小的数据量。当消费者从 broker 读取消息时，如果数据量小于这个阈值，broker会等待直到有足够多的数据然后才返回给消费者，对于写入量不高的主题来说，可以减少broker 和消费者的压力，因为减少了往返时间；而对于有大量消费者的主题来说，可以明显减轻 broker 压力 | 1            |
+| max.partition.fetch.bytes                      | 每个分区返回的最多字节数，默认1M，kafkaConsumer.poll()返回记录列表时，每个分区的记录字节数最多为1M。如果一个主题有20个分区，同时有5个消费者，每个消费者需要4M的空间处理消息，实际情况会设置更多空间，这样当存在消费者宕机时，其他消费者可以承担更多的分区 | 1M           |
 
 
 
@@ -598,6 +672,14 @@ public ProducerRecord(String topic, V value) {
 
 ## Producer
 
+### 生产流程解析
+
+字符串序列化器，整型、字节数组序列化器
+
+![](img-Kafka-介绍与使用/生产流程.png)
+
+发送的时候会将消息进行序列化，因为涉及到了 TCP 传输
+
 ```java
 // 带回调的异步发送
 public Future<RecordMetadata> send(ProducerRecord<K, V> record, Callback callback);
@@ -614,7 +696,7 @@ public Future<RecordMetadata> send(ProducerRecord<K, V> record) {
 
 ### 同步方式生产消息
 
-同步发送的意思就是，一条消息发送之后，会阻塞当前线程，直至返回 ack。 由于 send 方法返回的是一个 Future 对象，根据 Futrue 对象的特点，我们也可以实现同 步发送的效果，只需在调用 Future 对象的 get 方发即可。
+**同步发送的意思就是，一条消息发送之后，会阻塞当前线程，直至返回 ack。** 由于 send 方法返回的是一个 Future 对象，根据 Futrue 对象的特点，我们也可以实现同 步发送的效果，只需在调用 Future 对象的 get 方发即可。
 
 ```java
 import org.apache.kafka.clients.producer.KafkaProducer;
@@ -638,18 +720,38 @@ public class ProductDemo {
 
         KafkaProducer<String, String> kafkaProducer = null;
         try {
+          
             // 1、创建用于连接kafka的配置。
             Properties props = new Properties();
+          
             // 指定kafka集群地址
             props.put("bootstrap.servers", "192.168.136.151:9092");
             // 指定acks模式，acks可取值1（默认值，消息写入leader后就返回应答，不等待副本同步。），0（不考虑任何的应答，即不考虑消息是否丢失），all（保证消息不丢失，其实就是当消息同步到主题分区的ISR副本中之后再返回值给生产者。）
             props.put("acks", "all");
             props.put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer");
             props.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer");
-             
-            // 以下都有默认配置，可不配
+
+             // 设置 key 序列化器
+            // prop.put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer");
+            // prop.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+
+            // 设置重试次数
+            // prop.put(ProducerConfig.RETRIES_CONFIG, 10);
+            // 设置值序列化器
+            //  props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+            // 设置集群地址
+            // props.put("bootstrap.servers", brokerList);
+
+            // 自定义分区的使用
+            // props.put(ProducerConfig.PARTITIONER_CLASS_CONFIG, )
+            // 自定义拦截器的使用
+            // props.put(ProducerConfig.INTERCEPTOR_CLASSES_CONFIG, ProducerInterceptorPrefix.class.getName());
+
+            //
+            props.put(ProducerConfig.ACKS_CONFIG, "0");
             // 重试次数
              props.put("retries", 1);
+          
              // 设置批次大小，单位：字节
              props.put("batch.size", 16384);
              // 等待时间
@@ -759,6 +861,9 @@ public void subscribe(Collection<String> topics);
 
 // 指定主题并设置监听事件
 public void subscribe(Collection<String> topics, ConsumerRebalanceListener listener);
+
+// 正则匹配
+public void subscribe(Pattern pattern);
 ```
 
 
@@ -935,11 +1040,55 @@ while(true) {
 
 
 
+```java
+public class ConsumerFastStart {
+
+    private static final String brokerList = "182.xxxxx:9092";
+
+    private static final String topic = "jiang";
+
+    private static final String groupId = "group.demo";
+
+    public static void main(String[] args) {
+        Properties properties = new Properties();
+        // 消费端为反序列化
+//        properties.put("key.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
+        properties.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+//        properties.put("value.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
+        properties.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+//        properties.put("bootstrap.servers", brokerList);
+        properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, brokerList);
+//        properties.put("group.id", groupId);
+        properties.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
+        KafkaConsumer<String, String> consumer = new KafkaConsumer<>(properties);
+
+        // 订阅主题，可以订阅多个
+        consumer.subscribe(Collections.singletonList(topic));
+        // 正则表达式匹配
+        consumer.subscribe(Pattern.compile("jiang*"));
+
+        // 分区
+        consumer.assign(Arrays.asList(new TopicPartition(topic, 0))); // 那么只会消费分区 0 的消息
+        while (true) {
+          // 提交数据
+            ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(1000));
+            for (ConsumerRecord<String, String> record : records) {
+                System.out.println(record.value());
+            }
+        }
+    }
+}
+```
+
+
+
 
 
 ### 自动提交offset
 
-Kafka 提供了自动提交 offset 的功能。
+Kafka 提供了自动提交 offset 的功能。这种方式让消费者来管理位移，应用本身不需要显示操作，当enable.auto.commit=true，那么消费者会在poll方法调用后每隔5秒（auto.commit.interval.ms）提交一次位移，和很多其他操作一样，自动提交也是由 poll() 方法驱动的，在调用 poll 时，消费者判断是否到达提交时间，如果是则提交上一次 poll 返回的最大位移
+
+这种方式可能会导致消息重复消费，假如某个消息 poll 之后，应用正在处理消息，3秒后，kafka 进行了重平衡，那么由于没有更新位移导致重平衡后这部分消息重复消费
 
 自动提交 offset 的相关参数：
 
@@ -1008,7 +1157,7 @@ public class ConsumerDemo {
 
 虽然自动提交 offset 十分简介便利，但由于其是基于时间提交的，开发人员难以把握 offset 提交的时机。因此 Kafka 还提供了手动提交 offset 的 API。
 
-手动提交 offset 的方法有两种：分别是 commitSync（同步提交）和 commitAsync（异步 提交）。两者的相同点是，都会将本次 poll 的一批数据最高的偏移量提交；不同点是， commitSync 阻塞当前线程，一直到提交成功，并且会自动失败重试（由不可控因素导致， 也会出现提交失败）；而 commitAsync 则没有失败重试机制。
+手动提交 offset 的方法有两种：分别是 commitSync（同步提交）和 commitAsync（异步 提交）。两者的相同点是，**都会将本次 poll 的一批数据最高的偏移量提交**；不同点是， **commitSync 阻塞当前线程，一直到提交成功，并且会自动失败重试（由不可控因素导致， 也会出现提交失败）；而 commitAsync 则没有失败重试机制。**
 
 
 
@@ -1131,13 +1280,15 @@ consumer启动时会获取一次offset，而后在自己的内存中进行维护
 
 ### 自定义 Interceptor
 
+#### Producer 拦截器
+
 Producer 拦截器(interceptor)是在 Kafka 0.10 版本被引入的，主要用于实现 clients 端的定 制化控制逻辑。
 
 对于 producer 而言，interceptor 使得用户在消息发送前以及 producer 回调逻辑前有机会 对消息做一些定制化需求，比如修改消息等。同时，producer 允许用户指定多个 interceptor 按序作用于同一条消息从而形成一个拦截链(interceptor chain)。Intercetpor 的实现接口是 org.apache.kafka.clients.producer.ProducerInterceptor，其定义的方法包括：
 
 - configure(configs)：获取配置信息和初始化数据时调用。
-- onSend(ProducerRecord)：该方法封装进 KafkaProducer.send 方法中，即它运行在用户主线程中。Producer 确保在消息被序列化以及计算分区前调用该方法。用户可以在该方法中对消息做任何操作，但最好保证不要修改消息所属的 topic 和分区，否则会影响目标分区的计算。
-- onAcknowledgement(RecordMetadata, Exception)：该方法会在消息从 RecordAccumulator 成功发送到 Kafka Broker 之后，或者在发送过程中失败时调用。并且通常都是在 producer 回调逻辑触发之前。onAcknowledgement 运行在 producer 的 IO 线程中，因此不要在该方法中放入很重的逻辑，否则会拖慢 producer 的消息 发送效率。
+- onSend(ProducerRecord)：**该方法封装进 KafkaProducer.send 方法中，即它运行在用户主线程中**。Producer 确保**在消息被序列化以及计算分区前**调用该方法。用户可以在该方法中对消息做任何操作，但最好保证不要修改消息所属的 topic 和分区，否则会影响目标分区的计算。
+- onAcknowledgement(RecordMetadata, Exception)：该方法会在消息从 RecordAccumulator 成功发送到 Kafka Broker 之后，或者在发送过程中失败时调用。**并且通常都是在 producer 回调逻辑触发之前**。onAcknowledgement 运行在 producer 的 IO 线程中，因此不要在该方法中放入很重的逻辑，否则会拖慢 producer 的消息 发送效率。
 - close：关闭 interceptor，主要用于执行一些资源清理工作。
 
 interceptor 可能被运行在多个线程中，因此在具体实现时用户需要自行确保 线程安全。另外倘若指定了多个 interceptor，则 producer 将按照指定顺序调用它们，并且每个 interceptor 可能抛出的异常记录会捕获到错误日志中而非向上传递。这在使用过程中 要特别留意。
@@ -1238,6 +1389,8 @@ public class TestInterceptor {
         List<String> interceptors = new ArrayList<>();
         interceptors.add("com.example.demo.TimeInterceptor");
         interceptors.add("com.example.demo.CounterInterceptor");
+      
+      	// 多个拦截链
         props.put(ProducerConfig.INTERCEPTOR_CLASSES_CONFIG, interceptors);
         String topic = "first";
         Producer<String, String> producer = new
@@ -1254,11 +1407,167 @@ public class TestInterceptor {
 }
 ```
 
+注： 一定要关闭 producer，这样才会调用 interceptor 的 close 方法
+        producer.close();
 
+
+
+#### Consumer Interceptor
+
+在消费到消息或者提交消息位移时进行的一些定制化的操作
+
+对消费消息设置一个有效期的属性，如果某条消息在既定的时间窗口内无法到达，就视为无效，不需要再被处理
+
+```java
+public class ConsumerIntercepter implements ConsumerInterceptor {
+
+
+    @Override
+    public ConsumerRecords<String, String> onConsume(ConsumerRecords records) {
+
+        System.out.println("before: " + records);
+        long now = System.currentTimeMillis();
+        Map<TopicPartition, List<ConsumerRecord<String, String>>> map = new HashMap<>();
+
+        Set<TopicPartition> partitions = records.partitions();
+        for (TopicPartition partition : partitions) {
+            List<ConsumerRecord<String, String>> tpRecords = records.records(partition);
+            List<ConsumerRecord<String, String>> newTpRecords = new ArrayList<>();
+            for (ConsumerRecord<String, String> record : tpRecords) {
+                if (now - record.timestamp() < 3000) {
+                    newTpRecords.add(record);
+                }
+            }
+
+            if (!newTpRecords.isEmpty()) {
+                map.put(partition, newTpRecords);
+            }
+        }
+
+        return null;
+    }
+
+    @Override
+    public void close() {
+
+    }
+
+    @Override
+    public void onCommit(Map offsets) {
+
+    }
+
+    @Override
+    public void configure(Map<String, ?> configs) {
+
+    }
+}
+
+```
+
+
+
+
+
+
+
+### 自定义分区器
+
+本身 Kafka 有自己的分区策略，如果未指定就会使用默认的分区策略，kafka 根据传递消息的 key 来进行分区的分配，hash(key) % numPartitions。如果 key 相同的话，会分配到统一分区
+
+源代码org.apache.kafka.clients.producer.Partitioner.DefaultPartitioner
+
+```java
+    public int partition(String topic, Object key, byte[] keyBytes, Object value, byte[] valueBytes, Cluster cluster,
+                         int numPartitions) {
+        if (keyBytes == null) {
+            return stickyPartitionCache.partition(topic, cluster);
+        }
+        // hash the keyBytes to choose a partition
+        return Utils.toPositive(Utils.murmur2(keyBytes)) % numPartitions;
+    }
+
+// stickyPartitionCache.partition
+    public int partition(String topic, Cluster cluster) {
+        Integer part = indexCache.get(topic);
+        if (part == null) {
+            return nextPartition(topic, cluster, -1);
+        }
+        return part;
+    }
+
+    public int nextPartition(String topic, Cluster cluster, int prevPartition) {
+        List<PartitionInfo> partitions = cluster.partitionsForTopic(topic);
+        Integer oldPart = indexCache.get(topic);
+        Integer newPart = oldPart;
+        // Check that the current sticky partition for the topic is either not set or that the partition that 
+        // triggered the new batch matches the sticky partition that needs to be changed.
+        if (oldPart == null || oldPart == prevPartition) {
+            List<PartitionInfo> availablePartitions = cluster.availablePartitionsForTopic(topic);
+            if (availablePartitions.size() < 1) {
+                Integer random = Utils.toPositive(ThreadLocalRandom.current().nextInt());
+                newPart = random % partitions.size();
+            } else if (availablePartitions.size() == 1) {
+                newPart = availablePartitions.get(0).partition();
+            } else {
+                while (newPart == null || newPart.equals(oldPart)) {
+                    int random = Utils.toPositive(ThreadLocalRandom.current().nextInt());
+                    newPart = availablePartitions.get(random % availablePartitions.size()).partition();
+                }
+            }
+            // Only change the sticky partition if it is null or prevPartition matches the current sticky partition.
+            if (oldPart == null) {
+                indexCache.putIfAbsent(topic, newPart);
+            } else {
+                indexCache.replace(topic, prevPartition, newPart);
+            }
+            return indexCache.get(topic);
+        }
+        return indexCache.get(topic);
+    }
+```
+
+
+
+```java
+// 第一种
+kafkaProducer.send(new ProducerRecord<String, String>("testpart",1,"0","value"+i));
+
+ 
+
+第二种自定义分区
+
+public class KafkaCustomPartitioner implements Partitioner {
+
+   @Override
+   public void configure(Map<String, ?> configs) {
+   }
+  
+   @Override
+   public int partition(String topic, Object arg1, byte[] keyBytes, Object arg3, byte[] arg4, Cluster cluster) {
+      List<PartitionInfo> partitions = cluster.partitionsForTopic(topic);
+      int partitionNum = partitions.size();
+      int partition = random.nextInt(partitionNum);
+       return partition;
+   }
+
+   @Override
+   public void close() {
+   }
+}
+
+
+// 在生产者那里添加属性
+properties.put(ProducerConfig.PARTITIONER_CLASS_CONFIG,"com.jiang.KafkaCustomPartitioner");
+```
+
+
+
+分区策略：https://blog.csdn.net/zuodaoyong/article/details/104383117
 
 # 重点
 
-topic的分区数只能增加不能减少，因为kafka只提供了分区增加时的处理方式，而没有提供删除分区时分区中数据的处理方式。
+topic的**分区数只能增加不能减少**，因为kafka只提供了分区增加时的处理方式，而没有提供删除分区时分区中数据的处理方式。
 
 某个主题的副本数指的是某个实例中它的某个分区leader 加上其他实例中对应那个实例的主题分区的follwer 的数量。（以上图为例：topicA的副本数=broker1的topicA的分区1的Leader+broker2中的topicA的分区1的follower=2）
 
@@ -1270,9 +1579,9 @@ kafka以日志形式存储消息。
 
 消息偏移量主题，具有50个分区，分布在不同的实例上，没有副本，文件名格式为 __consumer_offsets-分区。即如果有3个实例那么kafka会尽量均匀（分区数量）且有序（轮询，例如：broker1存储分区1，broker2存储分区2......）的在每个实例上存储分区。
 
-生产者可以往一个不存在的主题发送消息，kafka会自动创建这个主题，分区数和副本数默认都是1，可以在service.properties中配置。
+生产者可以往一个不存在的主题发送消息，kafka会自动创建这个主题，**分区数和副本数默认都是1**，可以在service.properties中配置。
 
-ISR队列由leader维护，同时kafka在zk中存储了ISR，保证了leader挂了之后也能正常运行。ISR在zk中的主要存储路径/brokers/topics。
+**ISR队列由leader维护，同时kafka在zk中存储了ISR，保证了leader挂了之后也能正常运行。ISR在zk中的主要存储路径/brokers/topics。**
 
 log的partitions分布在kafka集群中不同的broker上，每个broker可以请求备份其他broker上partition上的数据。kafka 集群支持配置一个partition备份的数量。
 
@@ -1281,6 +1590,10 @@ leader处理所有的针对这个partition的读写请求，而followers被动�
 消费者提交消费位移时提交的是当前消费到的最新消息的 offset+1。
 
 生产者客户端使用2个线程来处理，分别是main线程和send线程。即发送消息是使用独立线程来执行的。
+
+
+
+
 
 # Kafka基准测试
 
@@ -1455,7 +1768,7 @@ bin/ke.sh start
 
 账户：admin
 
-密码：123456
+密码：123456ß
 
 
 
