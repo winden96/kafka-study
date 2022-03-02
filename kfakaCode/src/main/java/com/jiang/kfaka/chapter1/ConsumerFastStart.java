@@ -16,7 +16,7 @@ import java.util.regex.Pattern;
 
 public class ConsumerFastStart {
 
-    private static final String brokerList = "182.92.227.85:9092";
+    private static final String brokerList = "xxx:9092";
 
     private static final String topic = "jiang";
 

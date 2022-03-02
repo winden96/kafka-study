@@ -10,7 +10,7 @@ import java.util.Properties;
 
 public class ProductFastStart {
 
-    private static final String brokerList = "182.92.227.85:9092";
+    private static final String brokerList = "xxxx:9092";
 
     // 创建的主题
     private static final String topic = "jiang-hhh";

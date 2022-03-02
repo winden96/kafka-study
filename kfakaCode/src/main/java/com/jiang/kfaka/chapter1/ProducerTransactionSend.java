@@ -14,7 +14,7 @@ import java.util.Properties;
 public class ProducerTransactionSend {
 
     public static final String topic = "heima";
-    public static final String brokerList = "182.92.227.85:9092";
+    public static final String brokerList = "xxx:9092";
     public static final String transactionId = "transactionId";
 
     public static void main(String[] args) {
